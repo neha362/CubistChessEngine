@@ -98,6 +98,26 @@ def col(i):     return i % 8
 def pc(p):      return p[0] if p else None   # 'w' or 'b'
 def pt(p):      return p[1] if p else None   # 'K','Q','R','B','N','P'
 
+def score_move(board, frm, to, promo):
+    p = board[frm]
+    if not p:
+        return 0
+    attacker_type = pt(p)
+    turn = pc(p)
+    opp = 'b' if turn == 'w' else 'w'
+    score = 0
+    victim = board[to]
+    if victim and pc(victim) == opp:
+        score = PIECE_VAL[pt(victim)] * 10 - PIECE_VAL[attacker_type]
+    elif attacker_type == 'P' and not victim and col(frm) != col(to):
+        ep_sq = sq(row(frm), col(to))
+        ep_v = board[ep_sq]
+        if ep_v and pc(ep_v) == opp and pt(ep_v) == 'P':
+            score = PIECE_VAL['P'] * 10 - PIECE_VAL[attacker_type]
+    if promo:
+        score += PIECE_VAL[promo.upper()]
+    return score
+
 def sq_name(i):
     """Index → algebraic  e.g. 0→'a8', 63→'h1'"""
     return FILES[col(i)] + str(8 - row(i))
@@ -354,6 +374,7 @@ def minimax(board, depth, alpha, beta, maximising, en_passant, castling):
 
     turn  = 'w' if maximising else 'b'
     moves = all_moves(board, turn, en_passant, castling)
+    moves.sort(key=lambda m: score_move(board, m[0], m[1], m[2]), reverse=True)
 
     if depth == 0 or not moves:
         if not moves:
@@ -389,6 +410,7 @@ def search(board, turn, en_passant, castling, depth=3, movetime_ms=None):
     global _stop
     _stop = False
     moves = all_moves(board, turn, en_passant, castling)
+    moves.sort(key=lambda m: score_move(board, m[0], m[1], m[2]), reverse=True)
     if not moves:
         return None
 
