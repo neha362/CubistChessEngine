@@ -38,6 +38,10 @@ At a high level, the codebase is split into:
 
 ## System flow visual
 
+Reference architecture screenshot:
+
+![CubistChessEngine system flow diagram](docs/assets/system-flow-diagram.png)
+
 ```mermaid
 flowchart LR
     UI["Frontend UI<br/>tournament_runner.html"] --> API["API Server<br/>tournament_api.py"]
