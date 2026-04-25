@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(grep *)",
+      "Bash(/Users/jevinta/miniconda3/bin/pip install *)",
+      "Bash(/Users/jevinta/miniconda3/bin/python -c \"import chess; print\\('chess:', chess.__version__\\)\")",
+      "Bash(/Users/jevinta/miniconda3/bin/python *)"
     ]
   }
 }
