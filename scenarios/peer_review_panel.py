@@ -3,8 +3,7 @@ peer_review_panel.py - Condorcet Peer Review Chess Engine
 =========================================================
 Scenario 5: Peer review panel (Condorcet jury theorem).
 
-Instead of choosing a move by auction, the panel chooses ENGINE COMPONENTS by
-majority vote. Three independent reviewers inspect the position and vote on:
+The panel chooses ENGINE COMPONENTS by majority vote. Three independent reviewers inspect the position and vote on:
 
   1. move ordering policy
   2. transposition-table policy
@@ -13,7 +12,7 @@ majority vote. Three independent reviewers inspect the position and vote on:
 The judge then synthesizes one engine from the winning components and searches
 the position with that assembled design.
 
-This mirrors the auction-house file structure:
+file structure:
   - dataclasses for panel records/results
   - reviewer wrappers
   - judge/panel orchestrator
