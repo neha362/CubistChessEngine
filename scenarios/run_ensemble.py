@@ -55,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 root = str(REPO_ROOT)
 if root not in sys.path:
     sys.path.insert(0, root)
-for sub in ("berserker1", "monte_carlo", "scenarios", "classical_minimax"):
+for sub in ("adapter_code", "scenarios"):
     p = str(REPO_ROOT / sub)
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -63,7 +63,7 @@ for sub in ("berserker1", "monte_carlo", "scenarios", "classical_minimax"):
 from layer3_ensemble import (  # noqa: E402
     Layer3Ensemble, Layer3Result, EngineProposal, SCENARIO_NAMES,
 )
-from movegen_agent import (  # noqa: E402
+from chaos_move_gen import (  # noqa: E402
     GameState, from_fen, STARTPOS, all_legal_moves, make_move, is_terminal,
     game_result, sq_name,
 )

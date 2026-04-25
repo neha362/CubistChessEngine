@@ -2,8 +2,8 @@ import random
 from dataclasses import dataclass
 from typing import Callable, Optional
 import chess
-from chess_engine.classical_game_state import terminal_score
-from chess_engine.classical_move_gen import MoveGenAgent
+from classical_game_state import terminal_score
+from classical_move_gen import MoveGenAgent
 
 MATE_SCORE=100000; TT_EXACT=0; TT_LOWER=1; TT_UPPER=2
 _PIECE_TO_Z=((chess.PAWN,0),(chess.KNIGHT,1),(chess.BISHOP,2),(chess.ROOK,3),(chess.QUEEN,4),(chess.KING,5))
