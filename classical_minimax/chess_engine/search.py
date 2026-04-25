@@ -8,9 +8,10 @@ from typing import Callable, Optional
 
 import chess
 
+from chess_engine.game_state import terminal_score
 from chess_engine.move_gen import MoveGenAgent
 
-MATE_SCORE = 30000
+MATE_SCORE = 100000
 
 # Transposition flags
 TT_EXACT = 0
@@ -120,10 +121,8 @@ class SearchAgent:
         v = self._eval_fn(board)
         return v if board.turn == chess.WHITE else -v
 
-    def _terminal(self, board: chess.Board, ply: int) -> int:
-        if board.is_check():
-            return -MATE_SCORE + ply
-        return 0
+    def _terminal(self, board: chess.Board, _ply: int) -> int:
+        return terminal_score(board)
 
     def _ordered_moves(self, board: chess.Board, prefer: Optional[chess.Move]) -> list[chess.Move]:
         moves = self._move_gen.generate_moves(board)
