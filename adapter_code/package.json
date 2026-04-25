@@ -1,0 +1,10 @@
+{
+  "name": "neural-pattern-js",
+  "version": "1.0.0",
+  "description": "Neural-inspired JS chess engine: pattern rule table + alpha-beta search",
+  "main": "nn_search.js",
+  "scripts": {
+    "test": "node nn_move_gen.js && node nn_eval.js && node nn_search.js"
+  },
+  "engines": { "node": ">=16.0.0" }
+}
