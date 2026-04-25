@@ -11,12 +11,13 @@ from .tunable_classical import TunableWeights
 def play(
     white: object,
     black: object,
-    max_plies: int = 60,
+    max_plies: int = 200,
 ) -> tuple[chess.Board, str | None]:
     b = chess.Board()
     for pl in range(max_plies):
-        if b.is_game_over():
-            return b, b.outcome().result() if b.outcome() else None
+        if b.is_game_over(claim_draw=True):
+            outcome = b.outcome(claim_draw=True)
+            return b, outcome.result() if outcome else "1/2-1/2"
         to_move = white if b.turn == chess.WHITE else black
         mv = to_move.pick_move(b)  # type: ignore[attr-defined]
         b.push(mv)
@@ -27,12 +28,12 @@ def head_to_head(
     classical_weights: TunableWeights | None = None,
     depth_c: int = 3,
     depth_b2: int = 3,
-    max_plies: int = 40,
+    max_plies: int = 200,
 ) -> str:
     w = ClassicalEngine(depth=depth_c, weights=classical_weights)
     x = Berserker2Engine(depth=depth_b2)
     b, res = play(w, x, max_plies=max_plies)
     if res and res.endswith("*"):
         return "draw/timeout"
-    r = b.result(claim_draw=True) if b.is_game_over() else "incomplete"
+    r = b.result(claim_draw=True) if b.is_game_over(claim_draw=True) else "incomplete"
     return r

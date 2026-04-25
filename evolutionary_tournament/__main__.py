@@ -58,7 +58,7 @@ def _evolve() -> None:
     best = stats[-1].best_weights
     print()
     print("head-to-head (evolved classical as White vs berserker_2) ...")
-    r = head_to_head(classical_weights=best, depth_c=3, depth_b2=2, max_plies=32)
+    r = head_to_head(classical_weights=best, depth_c=3, depth_b2=2, max_plies=200)
     print("result:", r)
 
 
