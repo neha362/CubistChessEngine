@@ -36,7 +36,20 @@ At a high level, the codebase is split into:
 - `tdleaf_nnue_engine/`  
   Separate TD-Leaf/NNUE experimentation track with training artifacts and benchmarks.
 
-See `architecture.md` for detailed flow diagrams.
+## System flow visual
+
+```mermaid
+flowchart LR
+    UI["Frontend UI<br/>tournament_runner.html"] --> API["API Server<br/>tournament_api.py"]
+    CLI["CLI Runner<br/>run_tournament.py"] --> ADAPTER["Unified Adapter<br/>engine_adapter.py"]
+    API --> ADAPTER
+    ADAPTER --> E1["Classical"]
+    ADAPTER --> E2["Berserker Chaos"]
+    ADAPTER --> E3["Berserker Siege"]
+    ADAPTER --> E4["MCTS"]
+    ADAPTER --> E5["Neural / Oracle"]
+    ADAPTER --> RESULT["GameResult + TournamentResult"]
+```
 
 ---
 
@@ -70,6 +83,19 @@ Main ensemble path:
 
 This enables position-conditioned decision making:
 the system can trust different engine families more in tactical chaos vs. endgame structure, etc.
+
+### Ensemble decision visual
+
+```mermaid
+flowchart TD
+    FEN["Input Position (FEN)"] --> PROPS["Gather 25 proposals<br/>5 search x 5 eval"]
+    FEN --> SCEN["Detect board scenarios<br/>(tactics/endgame/king safety/etc.)"]
+    PROPS --> L3["Layer 3 trust voting<br/>confidence x trust x priors"]
+    SCEN --> L3
+    L3 --> MOVE["Choose best move"]
+    MOVE --> SCORE["Score move quality<br/>vs reference engine"]
+    SCORE --> UPDATE["Update Bayesian trust matrix"]
+```
 
 ---
 
