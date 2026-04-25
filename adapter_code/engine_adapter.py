@@ -824,3 +824,275 @@ if __name__ == '__main__':
         b = build_engine(bn, time_limit=4.0, **kw)
         r = runner.play(w, b, max_moves=30)
         print(f"  {wn} vs {bn}: {r}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# build_combo() — Mix-and-Match: any search + any eval
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_combo(
+    search:     str,
+    eval_fn:    str,
+    max_depth:  int   = 4,
+    time_limit: float = 10.0,
+    **kwargs,
+) -> EngineAdapter:
+    """
+    Build a custom engine by pairing any search strategy with any eval function.
+
+    search options:
+        'classical_search'   alpha-beta + iterative deepening + TT
+        'chaos_search'       aggressive negamax, check-first ordering, no quiescence
+        'siege_search'       alpha-beta + quiescence through captures and checks
+        'mcts_search'        UCB1 Monte Carlo tree + random rollouts (ignores eval_fn)
+        'nn_search'          JS alpha-beta via subprocess (ignores eval_fn, uses nn_eval)
+
+    eval_fn options:
+        'classical_eval'     material + piece-square tables + open-file bonus
+        'chaos_eval'         attack proximity + pawn storm + discounted material
+        'siege_eval'         king-zone attack bonus + super-linear coordination
+        'nn_eval'            ~40 pattern rules via JS subprocess
+        'oracle_eval'        Claude API position scorer (slow, needs ANTHROPIC_API_KEY)
+
+    Examples:
+        build_combo('siege_search', 'chaos_eval')         # siege discipline + chaos aggression
+        build_combo('classical_search', 'oracle_eval')    # deep search + Claude scoring
+        build_combo('chaos_search', 'siege_eval')         # chaos tree + king-zone awareness
+        build_combo('mcts_search',  'classical_eval')     # MCTS with material rollout scoring
+    """
+    name = f"{search.replace('_search','')} + {eval_fn.replace('_eval','')}"
+
+    # ── Resolve the eval function ──────────────────────────────────────────
+
+    def _get_eval():
+        if eval_fn == 'classical_eval':
+            cm_dir = str(ENGINES_DIR / 'classical_minimax')
+            if cm_dir not in sys.path: sys.path.insert(0, cm_dir)
+            from chess_engine.classical_eval import EvalAgent
+            import chess
+            _ev = EvalAgent()
+            # Wrap: BoardState → chess.Board → score
+            def classical_eval_fn(state: BoardState) -> float:
+                return float(_ev.evaluate(_fen_to_chess_board(_to_fen(state))))
+            return classical_eval_fn
+
+        if eval_fn == 'chaos_eval':
+            chaos_dir = str(ENGINES_DIR / 'berserker_chaos')
+            if chaos_dir not in sys.path: sys.path.insert(0, chaos_dir)
+            from chaos_eval import evaluate as _ce
+            # chaos eval takes GameState; wrap with FEN bridge
+            def chaos_eval_fn(state: BoardState) -> float:
+                gs = _fen_to_chaos_gamestate(_to_fen(state))
+                return float(_ce(gs))
+            return chaos_eval_fn
+
+        if eval_fn == 'siege_eval':
+            siege_dir = str(ENGINES_DIR / 'berserker_siege')
+            if siege_dir not in sys.path: sys.path.insert(0, siege_dir)
+            from siege_eval import Evaluator as _SE
+            _ev = _SE()
+            def siege_eval_fn(state: BoardState) -> float:
+                return float(_ev.evaluate(_fen_to_chess_board(_to_fen(state))))
+            return siege_eval_fn
+
+        if eval_fn == 'nn_eval':
+            # Call the JS eval via subprocess
+            nn_dir = ENGINES_DIR / 'neural_pattern_js'
+            def nn_eval_fn(state: BoardState) -> float:
+                payload = json.dumps({'cmd': 'eval', 'fen': _to_fen(state)}) + '\n'
+                try:
+                    result = subprocess.run(
+                        ['node', str(nn_dir / '_bridge.js')],
+                        input=payload, capture_output=True, text=True,
+                        cwd=str(nn_dir), timeout=10.0,
+                    )
+                    resp = json.loads(result.stdout.strip().split('\n')[-1])
+                    return float(resp.get('score', 0))
+                except Exception:
+                    return 0.0
+            return nn_eval_fn
+
+        if eval_fn == 'oracle_eval':
+            from eval_agent import oracle_eval as _oe
+            return _oe
+
+        # Fallback: our base PST evaluator
+        return Evaluator().evaluate
+
+    # ── Resolve the search strategy ────────────────────────────────────────
+
+    if search == 'classical_search':
+        resolved_eval = _get_eval()
+        agent = SearchAgent(eval_fn=resolved_eval, max_depth=max_depth, time_limit=time_limit)
+        return EngineAdapter(name, agent.search,
+                             f'Classical α-β search + {eval_fn}')
+
+    if search == 'chaos_search':
+        # chaos_search uses its own internal eval call; we replace it by
+        # monkey-patching the eval import in the chaos module at import time
+        chaos_dir = str(ENGINES_DIR / 'berserker_chaos')
+        if chaos_dir not in sys.path: sys.path.insert(0, chaos_dir)
+        import chaos_search as _cs_mod
+        resolved_eval = _get_eval()
+        # Swap the eval function chaos_search calls internally
+        import chaos_eval as _ce_mod
+        _orig_evaluate = _ce_mod.evaluate
+
+        def chaos_combo_search(state: BoardState):
+            fen = _to_fen(state)
+            gs  = _fen_to_chaos_gamestate(fen)
+            # Temporarily swap chaos eval with our chosen eval (FEN-bridged)
+            def _bridged(gs_inner):
+                # Convert GameState back to BoardState for the eval
+                inner_fen = _chaos_gs_to_fen(gs_inner)
+                inner_bs  = parse_fen(inner_fen)
+                return resolved_eval(inner_bs)
+            _ce_mod.evaluate = _bridged
+            try:
+                r = _cs_mod.search(gs, max_depth=max_depth,
+                                   movetime_ms=int(time_limit*1000), verbose=False)
+            finally:
+                _ce_mod.evaluate = _orig_evaluate  # always restore
+            if r.move is None:
+                return _fallback(state)
+            return _resolve_uci(state, r.uci)
+
+        return EngineAdapter(name, chaos_combo_search,
+                             f'Chaos negamax + {eval_fn}')
+
+    if search == 'siege_search':
+        siege_dir = str(ENGINES_DIR / 'berserker_siege')
+        if siege_dir not in sys.path: sys.path.insert(0, siege_dir)
+        from siege_move_gen import MoveGen   as _SMG
+        from siege_search   import Search    as _SS
+
+        # Create a proxy Evaluator that wraps our chosen eval
+        class _ProxyEval:
+            def evaluate(self, chess_board) -> int:
+                import chess
+                fen = chess_board.fen()
+                bs  = parse_fen(fen)
+                raw = resolved_eval(bs)
+                return int(raw)
+
+        resolved_eval = _get_eval()
+        mg = _SMG()
+        sa = _SS(extend_checks_in_qsearch=True)
+        proxy = _ProxyEval()
+
+        def siege_combo_search(state: BoardState):
+            board = _fen_to_chess_board(_to_fen(state))
+            try:
+                m, score = sa.find_best_move(board, mg, proxy,
+                                             time_limit=time_limit, max_depth=max_depth)
+                if m is None: return _fallback(state)
+                return _resolve_uci(state, m.uci())
+            except Exception:
+                return _fallback(state)
+
+        return EngineAdapter(name, siege_combo_search,
+                             f'Siege α-β+Q + {eval_fn}')
+
+    if search == 'mcts_search':
+        # MCTS doesn't use a traditional eval — it uses rollouts.
+        # When paired with an eval function, we use the eval as the rollout scorer:
+        # instead of playing to terminal, we score the position after N random moves.
+        mcts_dir = str(ENGINES_DIR / 'monte_carlo_mcts')
+        if mcts_dir not in sys.path: sys.path.insert(0, mcts_dir)
+        import mcts_search    as _ms_mod
+        import mcts_rollout   as _mr_mod
+        import mcts_move_gen  as _mmg_mod
+
+        resolved_eval = _get_eval()
+        iterations    = kwargs.get('iterations', 400)
+
+        def mcts_combo_search(state: BoardState):
+            gs = _fen_to_mcts_gamestate(_to_fen(state))
+
+            # Replace the rollout policy with our eval-based scorer
+            def eval_rollout(gs_inner, max_plies=8):
+                """Short rollout then eval, instead of play-to-terminal."""
+                current = gs_inner
+                for _ in range(max_plies):
+                    if _mr_mod.is_terminal(current):
+                        return _mr_mod.game_result(current)
+                    move = _mr_mod.fast_random_move(current)
+                    if move is None: break
+                    current = _mmg_mod.make_move(current, move)
+                # Score with eval
+                fen_str = _chaos_gs_to_fen(current)  # reuse FEN converter
+                bs = parse_fen(fen_str)
+                raw = resolved_eval(bs)
+                # Normalise centipawns → [0,1]: 0=black winning, 1=white winning
+                return min(1.0, max(0.0, (raw + 1500) / 3000))
+
+            orig_rollout = _mr_mod.rollout
+            _mr_mod.rollout = eval_rollout
+            try:
+                r = _ms_mod.mcts_search(gs, max_iter=iterations,
+                                        movetime_ms=int(time_limit*1000), verbose=False)
+            finally:
+                _mr_mod.rollout = orig_rollout
+            if r.best_move is None:
+                return _fallback(state)
+            return _resolve_uci(state, r.best_uci)
+
+        return EngineAdapter(name, mcts_combo_search,
+                             f'MCTS + {eval_fn} rollout scorer')
+
+    if search == 'nn_search':
+        # JS search always uses JS eval internally — we can't easily inject Python
+        # eval into Node.js at runtime, so nn_search combos use the JS engine as-is
+        # but are still included so the matrix is complete and comparable.
+        runner  = _NeuralNNRunner()
+        depth   = kwargs.get('depth', 3)
+        time_ms = int(time_limit * 1000)
+
+        def nn_combo_search(state: BoardState):
+            uci = runner.get_move(_to_fen(state), depth=depth, time_ms=time_ms)
+            if uci is None: return _fallback(state)
+            return _resolve_uci(state, uci)
+
+        return EngineAdapter(name, nn_combo_search,
+                             f'Neural JS α-β (eval fixed to nn_eval in JS)')
+
+    raise ValueError(
+        f"Unknown search {search!r}. Options: "
+        "classical_search, chaos_search, siege_search, mcts_search, nn_search"
+    )
+
+
+def _chaos_gs_to_fen(gs) -> str:
+    """Convert a berserker_chaos / monte_carlo GameState back to FEN string."""
+    FILES = 'abcdefgh'
+    PIECE_TO_FEN = {
+        'wP':'P','wN':'N','wB':'B','wR':'R','wQ':'Q','wK':'K',
+        'bP':'p','bN':'n','bB':'b','bR':'r','bQ':'q','bK':'k',
+    }
+    rows = []
+    for r in range(8):
+        empty = 0
+        row_str = ''
+        for c in range(8):
+            p = gs.board[r*8+c]
+            if p is None:
+                empty += 1
+            else:
+                if empty: row_str += str(empty); empty = 0
+                row_str += PIECE_TO_FEN.get(p, '?')
+        if empty: row_str += str(empty)
+        rows.append(row_str)
+    pos = '/'.join(rows)
+    cas_parts = []
+    if gs.castling.get('wK'): cas_parts.append('K')
+    if gs.castling.get('wQ'): cas_parts.append('Q')
+    if gs.castling.get('bK'): cas_parts.append('k')
+    if gs.castling.get('bQ'): cas_parts.append('q')
+    cas = ''.join(cas_parts) or '-'
+    ep = '-'
+    if gs.ep_square is not None:
+        ep_r, ep_c = gs.ep_square // 8, gs.ep_square % 8
+        ep = FILES[ep_c] + str(8 - ep_r)
+    hm = getattr(gs, 'halfmove', 0)
+    fm = getattr(gs, 'fullmove', 1)
+    return f"{pos} {gs.turn} {cas} {ep} {hm} {fm}"
