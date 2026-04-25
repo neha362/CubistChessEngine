@@ -1,7 +1,7 @@
 from __future__ import annotations
 import math, time, random, sys
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from mcts_move_gen import GameState,from_fen,make_move,all_legal_moves,is_terminal,game_result,sq_name,STARTPOS
 from mcts_rollout import rollout
@@ -34,8 +34,12 @@ def _expand(node):
     move=node.untried.pop(); ns=make_move(node.state,move); child=MCTSNode(state=ns,move=move,parent=node)
     node.children.append(child); return child
 
-def _simulate(node):
+def _simulate(node, leaf_value_fn: Optional[Callable[[GameState], float]] = None):
     if node.is_terminal(): return game_result(node.state)
+    if leaf_value_fn is not None:
+        v = float(leaf_value_fn(node.state))
+        # Keep MCTS accounting stable even if caller returns out-of-range values.
+        return max(0.0, min(1.0, v))
     return rollout(node.state)
 
 def _backpropagate(node,result):
@@ -52,7 +56,7 @@ class MCTSResult:
         if not self.best_move: return '0000'
         f,t,pr=self.best_move; return sq_name(f)+sq_name(t)+pr
 
-def mcts_search(state,max_iter=1000,movetime_ms=None,c=UCB1_C,verbose=False):
+def mcts_search(state,max_iter=1000,movetime_ms=None,c=UCB1_C,verbose=False,leaf_value_fn: Optional[Callable[[GameState], float]] = None):
     if is_terminal(state): return MCTSResult(None,0,0,0,0.5)
     root=MCTSNode(state=state); start=time.time(); iters=0
     def _over_budget():
@@ -61,7 +65,7 @@ def mcts_search(state,max_iter=1000,movetime_ms=None,c=UCB1_C,verbose=False):
     while not _over_budget():
         node=_select(root)
         if not node.is_terminal(): node=_expand(node)
-        result=_simulate(node)
+        result=_simulate(node,leaf_value_fn=leaf_value_fn)
         _backpropagate(node,result)
         iters+=1
     if not root.children:

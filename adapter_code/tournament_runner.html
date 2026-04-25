@@ -1,0 +1,1759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chess Engine Tournament</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap');
+
+  :root {
+    --bg:        #0a0a0f;
+    --surface:   #13131c;
+    --surface2:  #1c1c2e;
+    --border:    #2a2a40;
+    --accent:    #7c6bff;
+    --accent2:   #ff6b9d;
+    --gold:      #ffd166;
+    --green:     #06d6a0;
+    --red:       #ef476f;
+    --text:      #e8e8f0;
+    --muted:     #6b6b8a;
+    --mono:      'JetBrains Mono', monospace;
+    --sans:      'Syne', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(124,107,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,107,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .layout {
+    position: relative;
+    z-index: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 3rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo-block h1 {
+    font-size: clamp(1.8rem, 4vw, 2.8rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .logo-block .tagline {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-top: 0.4rem;
+  }
+
+  .status-pill {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    padding: 0.35rem 0.9rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    transition: all 0.3s;
+  }
+
+  .status-pill.running {
+    border-color: var(--green);
+    color: var(--green);
+    animation: pulse-border 2s infinite;
+  }
+
+  @keyframes pulse-border {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(6,214,160,0.3); }
+    50% { box-shadow: 0 0 0 4px rgba(6,214,160,0); }
+  }
+
+  /* Two-column layout */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  @media (max-width: 900px) {
+    .main-grid { grid-template-columns: 1fr; }
+  }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .card-header {
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-title {
+    font-size: 0.65rem;
+    font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+  }
+
+  .card-body { padding: 1.2rem; }
+
+  /* Engine list */
+  .engine-list { display: flex; flex-direction: column; gap: 0.6rem; }
+
+  .engine-item {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.75rem 0.9rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+  }
+
+  .engine-item:hover { border-color: var(--accent); transform: translateX(2px); }
+  .engine-item.active { border-color: var(--accent); background: rgba(124,107,255,0.08); }
+  .engine-item.active .engine-dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+  .engine-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+    flex-shrink: 0;
+    transition: all 0.2s;
+  }
+
+  .engine-info { flex: 1; min-width: 0; }
+
+  .engine-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .engine-desc {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    color: var(--muted);
+    margin-top: 0.15rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .engine-badge {
+    font-family: var(--mono);
+    font-size: 0.55rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    flex-shrink: 0;
+  }
+
+  .badge-py  { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+  .badge-js  { background: rgba(251,191,36,0.15);  color: #fbbf24; border: 1px solid rgba(251,191,36,0.3); }
+  .badge-ai  { background: rgba(124,107,255,0.15); color: var(--accent); border: 1px solid rgba(124,107,255,0.3); }
+
+  /* Config section */
+  .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-bottom: 1rem; }
+
+  .field-label {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-bottom: 0.4rem;
+  }
+
+  .field-input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.7rem;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    outline: none;
+    transition: border-color 0.2s;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  .field-input:focus { border-color: var(--accent); }
+
+  /* Buttons */
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.75rem 1.2rem;
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+    letter-spacing: 0.01em;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #9180ff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 20px rgba(124,107,255,0.4);
+  }
+
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .btn-secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+
+  .btn-secondary:hover { border-color: var(--accent); color: var(--text); }
+
+  .btn-row { display: flex; gap: 0.6rem; margin-top: 0.8rem; }
+  .btn-row .btn { flex: 1; }
+
+  /* Right panel — tabs */
+  .tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 1.2rem;
+  }
+
+  .tab {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.75rem 0.8rem;
+    cursor: pointer;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    margin-bottom: -1px;
+  }
+
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .tab-content { display: none; padding: 1.2rem; }
+  .tab-content.active { display: block; }
+
+  /* Console */
+  .console {
+    background: #080810;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    line-height: 1.7;
+    min-height: 320px;
+    max-height: 420px;
+    overflow-y: auto;
+    color: #a0a0c0;
+  }
+
+  .console::-webkit-scrollbar { width: 4px; }
+  .console::-webkit-scrollbar-track { background: transparent; }
+  .console::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .log-info    { color: #a0a0c0; }
+  .log-move    { color: var(--green); }
+  .log-result  { color: var(--gold); font-weight: 500; }
+  .log-error   { color: var(--red); }
+  .log-header  { color: var(--accent); font-weight: 500; }
+  .log-prompt  { color: var(--muted); }
+
+  .cursor-blink {
+    display: inline-block;
+    width: 6px; height: 12px;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: middle;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* Leaderboard */
+  .leaderboard { display: flex; flex-direction: column; gap: 0.5rem; }
+
+  .lb-row {
+    display: grid;
+    grid-template-columns: 24px 1fr 48px 48px 48px 64px;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.65rem 0.9rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    transition: all 0.3s;
+  }
+
+  .lb-row.highlight { border-color: var(--gold); background: rgba(255,209,102,0.05); }
+
+  .lb-rank {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  .lb-rank.gold   { color: var(--gold); font-weight: 700; }
+  .lb-rank.silver { color: #c0c0d0; }
+  .lb-rank.bronze { color: #cd7f32; }
+
+  .lb-name { font-size: 0.82rem; font-weight: 600; }
+
+  .lb-stat {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  .lb-stat.wins   { color: var(--green); }
+  .lb-stat.losses { color: var(--red); }
+
+  .lb-bar-wrap {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    grid-column: 1 / -1;
+    margin-top: -0.2rem;
+    display: none;
+  }
+
+  .lb-row.highlight .lb-bar-wrap { display: block; }
+
+  .lb-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 2px;
+    transition: width 1s ease;
+  }
+
+  /* Match log table */
+  .match-log { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 0.7rem; }
+  .match-log th {
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.6rem;
+  }
+  .match-log td {
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid rgba(42,42,64,0.5);
+    color: var(--text);
+  }
+  .match-log tr:last-child td { border-bottom: none; }
+  .match-log tr:hover td { background: var(--surface2); }
+
+  .result-tag {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .result-w { background: rgba(6,214,160,0.15); color: var(--green); }
+  .result-b { background: rgba(239,71,111,0.15); color: var(--red); }
+  .result-d { background: rgba(107,107,138,0.15); color: var(--muted); }
+
+  /* Chess board preview */
+  .board-preview {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    aspect-ratio: 1;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+
+  .sq {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: clamp(0.7rem, 1.5vw, 1rem);
+    transition: background 0.2s;
+  }
+
+  .sq.light { background: #1e1e35; }
+  .sq.dark  { background: #14142a; }
+  .sq.last-from { background: rgba(124,107,255,0.25); }
+  .sq.last-to   { background: rgba(124,107,255,0.45); }
+
+  /* FEN input */
+  .fen-row {
+    display: flex;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+  }
+
+  .fen-row .field-input { flex: 1; font-size: 0.65rem; }
+  .fen-row .btn { width: auto; padding: 0.5rem 0.8rem; font-size: 0.72rem; }
+
+  /* Progress bar */
+  .progress-wrap {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 2px;
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+
+  /* Pill stats row */
+  .stats-row {
+    display: flex;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .stat-pill {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.8rem;
+    flex: 1;
+    min-width: 70px;
+    text-align: center;
+  }
+
+  .stat-pill .val {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: var(--accent);
+    display: block;
+  }
+
+  .stat-pill .lbl {
+    font-family: var(--mono);
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    display: block;
+    margin-top: 0.1rem;
+  }
+
+  /* Tooltip */
+  [data-tip] { position: relative; cursor: help; }
+  [data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1c1c2e;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 5px;
+    white-space: nowrap;
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  /* Section divider */
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1rem 0;
+  }
+
+  /* Empty state */
+  .empty {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+  }
+
+  .empty .big { font-size: 2rem; margin-bottom: 0.8rem; opacity: 0.3; }
+
+  /* Code block */
+  .code-snippet {
+    background: #080810;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    line-height: 1.8;
+    color: #a0a0c0;
+    overflow-x: auto;
+    margin-bottom: 0.8rem;
+    position: relative;
+  }
+
+  .code-snippet .kw  { color: var(--accent); }
+  .code-snippet .str { color: var(--green); }
+  .code-snippet .cm  { color: var(--muted); font-style: italic; }
+  .code-snippet .fn  { color: var(--gold); }
+  .code-snippet .num { color: var(--accent2); }
+
+  .copy-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    padding: 0.2rem 0.5rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* Scrollable match log wrapper */
+  .table-wrap {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .table-wrap::-webkit-scrollbar { width: 4px; }
+  .table-wrap::-webkit-scrollbar-thumb { background: var(--border); }
+
+
+  /* Mode toggle buttons */
+  .mode-btn {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .mode-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .mode-btn:hover:not(.active) { border-color: var(--accent); color: var(--text); }
+
+  /* Combo chip */
+  .combo-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    transition: border-color 0.2s;
+  }
+  .combo-chip.active { border-color: var(--accent); }
+  .combo-chip .chip-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  }
+  .combo-chip .chip-label { flex: 1; color: var(--text); }
+  .combo-chip .chip-search { color: var(--green); }
+  .combo-chip .chip-plus   { color: var(--muted); margin: 0 0.1rem; }
+  .combo-chip .chip-eval   { color: var(--accent2); }
+  .combo-chip .chip-remove {
+    background: none; border: none; color: var(--muted);
+    cursor: pointer; font-size: 0.8rem; padding: 0 0.1rem; line-height: 1;
+    transition: color 0.2s;
+  }
+  .combo-chip .chip-remove:hover { color: var(--red); }
+
+  /* Scrollable combo list */
+  #comboList { max-height: 220px; overflow-y: auto; }
+  #comboList::-webkit-scrollbar { width: 3px; }
+  #comboList::-webkit-scrollbar-thumb { background: var(--border); }
+
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- Header -->
+  <header>
+    <div class="logo-block">
+      <h1>Chess Engine Tournament</h1>
+      <div class="tagline">Hackathon Round-Robin Runner · Mix &amp; Match Mode</div>
+    </div>
+    <div class="status-pill" id="statusPill">Idle</div>
+  </header>
+
+  <div class="main-grid">
+
+    <!-- LEFT: Config panel -->
+    <div style="display:flex;flex-direction:column;gap:1rem;">
+
+      <!-- Mode toggle + selector -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Tournament Mode</span>
+          <div style="display:flex;gap:0.4rem;">
+            <button class="mode-btn active" id="modeEngineBtn" onclick="setMode('engine')">Engines</button>
+            <button class="mode-btn"        id="modeComboBtn"  onclick="setMode('combo')">Mix &amp; Match</button>
+          </div>
+        </div>
+
+        <!-- Engine mode -->
+        <div class="card-body" id="panelEngine">
+          <div style="font-family:var(--mono);font-size:0.62rem;color:var(--muted);margin-bottom:0.8rem;">
+            Select complete engines to pit against each other.
+          </div>
+          <div class="engine-list" id="engineList"></div>
+          <div style="margin-top:0.6rem;font-family:var(--mono);font-size:0.6rem;color:var(--muted);">
+            <span id="selectedCount" style="color:var(--accent)">0</span> selected
+          </div>
+        </div>
+
+        <!-- Combo / Mix-and-Match mode -->
+        <div class="card-body" id="panelCombo" style="display:none;">
+          <div style="font-family:var(--mono);font-size:0.62rem;color:var(--muted);margin-bottom:0.8rem;">
+            Pair any search with any eval. Each combo enters the tournament as its own engine.
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:0.5rem;align-items:end;margin-bottom:0.8rem;">
+            <div>
+              <div class="field-label">Search</div>
+              <select class="field-input" id="comboSearch">
+                <option value="classical_search">Classical &alpha;-&beta;</option>
+                <option value="chaos_search">Chaos negamax</option>
+                <option value="siege_search">Siege &alpha;-&beta;+Q</option>
+                <option value="mcts_search">MCTS rollouts</option>
+                <option value="nn_search">Neural JS &alpha;-&beta;</option>
+              </select>
+            </div>
+            <div>
+              <div class="field-label">Eval</div>
+              <select class="field-input" id="comboEval">
+                <option value="classical_eval">Classical PST</option>
+                <option value="chaos_eval">Chaos aggressive</option>
+                <option value="siege_eval">Siege king-zone</option>
+                <option value="nn_eval">Neural pattern</option>
+                <option value="oracle_eval">Claude Oracle</option>
+              </select>
+            </div>
+            <button class="btn btn-secondary" onclick="addCombo()"
+              style="width:auto;padding:0.5rem 0.7rem;font-size:0.72rem;">+ Add</button>
+          </div>
+
+          <div id="comboList">
+            <div style="font-family:var(--mono);font-size:0.62rem;color:var(--muted);text-align:center;padding:0.8rem 0;" id="comboEmpty">
+              No combos yet — build one above
+            </div>
+          </div>
+
+          <div style="margin-top:0.6rem;display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-family:var(--mono);font-size:0.6rem;color:var(--muted);">
+              <span id="comboCount" style="color:var(--accent)">0</span> combos &middot; min 2 to run
+            </span>
+            <button class="btn btn-secondary" onclick="clearCombos()"
+              style="width:auto;padding:0.25rem 0.5rem;font-size:0.6rem;">Clear all</button>
+          </div>
+
+          <hr class="divider">
+          <button class="btn btn-secondary" onclick="addPresetCombos()"
+            style="font-size:0.68rem;padding:0.5rem;">
+            &#9889; Add all 25 combinations (full matrix)
+          </button>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Game Settings</span>
+        </div>
+        <div class="card-body">
+
+          <div class="fen-row">
+            <input class="field-input" id="fenInput" placeholder="Starting FEN (leave blank for standard)" />
+            <button class="btn btn-secondary" onclick="resetFen()" style="width:auto;padding:0.5rem 0.7rem;font-size:0.7rem;">Reset</button>
+          </div>
+
+          <div id="boardPreview" class="board-preview"></div>
+
+          <div class="config-grid">
+            <div>
+              <div class="field-label" data-tip="Max half-moves per game">Max Moves</div>
+              <input class="field-input" id="maxMoves" type="number" value="120" min="20" max="500">
+            </div>
+            <div>
+              <div class="field-label" data-tip="Seconds each engine gets per move">Time / Move (s)</div>
+              <input class="field-input" id="timeLimit" type="number" value="5" min="1" max="60" step="0.5">
+            </div>
+            <div>
+              <div class="field-label" data-tip="Depth for tree-search engines">Search Depth</div>
+              <input class="field-input" id="searchDepth" type="number" value="3" min="1" max="8">
+            </div>
+            <div>
+              <div class="field-label" data-tip="Iterations for MCTS engine">MCTS Iters</div>
+              <input class="field-input" id="mctsIter" type="number" value="400" min="50" max="5000" step="50">
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="headBtn" onclick="startHeadToHead()" disabled>1v1 Game</button>
+            <button class="btn btn-primary"   id="tournBtn" onclick="startTournament()" disabled>Run Tournament</button>
+          </div>
+          <div style="margin-top:0.5rem;">
+            <button class="btn btn-secondary" id="stopBtn" onclick="stopRun()" disabled>Stop</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Generated Python -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">Generated Python</span></div>
+        <div class="card-body">
+          <div class="code-snippet" id="codeSnippet">
+            <button class="copy-btn" onclick="copyCode()">Copy</button>
+            <span class="cm"># Select engines or build combos above</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Results panel -->
+    <div class="card" style="min-height:600px;">
+      <div class="tab-bar">
+        <div class="tab active" onclick="switchTab('console',this)">Console</div>
+        <div class="tab" onclick="switchTab('leaderboard',this)">Leaderboard</div>
+        <div class="tab" onclick="switchTab('games',this)">Games</div>
+        <div class="tab" onclick="switchTab('usage',this)">How to Use</div>
+      </div>
+
+      <!-- Console tab -->
+      <div class="tab-content active" id="tab-console">
+        <div class="stats-row" id="statsRow">
+          <div class="stat-pill"><span class="val" id="statGames">0</span><span class="lbl">Games</span></div>
+          <div class="stat-pill"><span class="val" id="statMoves">&mdash;</span><span class="lbl">Moves</span></div>
+          <div class="stat-pill"><span class="val" id="statTime">&mdash;</span><span class="lbl">Elapsed</span></div>
+          <div class="stat-pill"><span class="val" id="statResult">&mdash;</span><span class="lbl">Last Result</span></div>
+        </div>
+        <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="console" id="console">
+          <span class="log-prompt">$ </span><span class="log-info">Tournament runner ready. Select engines or build combos, then press Run.</span><br>
+          <span class="cursor-blink"></span>
+        </div>
+      </div>
+
+      <!-- Leaderboard tab -->
+      <div class="tab-content" id="tab-leaderboard">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem;">
+          <span class="card-title">Rankings</span>
+          <button class="btn btn-secondary" id="exportLbBtn" onclick="exportLeaderboardCSV()" disabled
+            style="width:auto;padding:0.35rem 0.8rem;font-size:0.65rem;display:flex;align-items:center;gap:0.4rem;">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Export CSV
+          </button>
+        </div>
+        <div class="leaderboard" id="leaderboard">
+          <div class="empty"><div class="big">&#9817;</div>Run a tournament to see rankings</div>
+        </div>
+      </div>
+
+      <!-- Games tab -->
+      <div class="tab-content" id="tab-games">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem;">
+          <span class="card-title">Match History</span>
+          <button class="btn btn-secondary" id="exportGamesBtn" onclick="exportGamesCSV()" disabled
+            style="width:auto;padding:0.35rem 0.8rem;font-size:0.65rem;display:flex;align-items:center;gap:0.4rem;">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Export CSV
+          </button>
+        </div>
+        <div class="table-wrap" id="gamesTableWrap">
+          <div class="empty"><div class="big">&#9876;</div>No games played yet</div>
+        </div>
+      </div>
+
+      <!-- How to Use tab -->
+      <div class="tab-content" id="tab-usage">
+        <div style="max-height:500px;overflow-y:auto;padding-right:0.5rem;">
+
+          <div style="margin-bottom:1.5rem;">
+            <div class="field-label" style="margin-bottom:0.6rem;">Mix &amp; Match — how it works</div>
+            <div style="font-family:var(--mono);font-size:0.68rem;line-height:1.9;color:var(--muted);">
+              Every engine has three parts: <span style="color:var(--text)">move gen</span> (legal moves),
+              <span style="color:var(--green)">search</span> (tree traversal strategy), and
+              <span style="color:var(--accent2)">eval</span> (position scoring).<br><br>
+              In <span style="color:var(--accent)">Mix &amp; Match</span> mode you independently choose the
+              search and eval from different engine families. The move gen is always the shared base
+              (all engines produce the same legal moves — the interesting variation is in search and eval).<br><br>
+              Example: <span style="color:var(--green)">Siege search</span> (aggressive &alpha;-&beta; with quiescence)
+              + <span style="color:var(--accent2)">Chaos eval</span> (attack-proximity scoring) tests whether
+              Siege's <em>search discipline</em> combined with Chaos's <em>aggression metric</em> outperforms
+              either engine running pure.
+            </div>
+          </div>
+
+          <div style="margin-bottom:1.5rem;">
+            <div class="field-label" style="margin-bottom:0.6rem;">build_combo() in Python</div>
+            <div class="code-snippet">
+<span class="kw">from</span> engine_adapter <span class="kw">import</span> <span class="fn">build_combo</span>, <span class="fn">run_tournament</span>
+
+<span class="cm"># build_combo(search, eval, max_depth, time_limit)</span>
+combos = [
+    <span class="fn">build_combo</span>(<span class="str">'classical_search'</span>, <span class="str">'classical_eval'</span>),   <span class="cm"># pure classical</span>
+    <span class="fn">build_combo</span>(<span class="str">'siege_search'</span>,     <span class="str">'chaos_eval'</span>),       <span class="cm"># siege search + chaos aggression</span>
+    <span class="fn">build_combo</span>(<span class="str">'chaos_search'</span>,     <span class="str">'siege_eval'</span>),       <span class="cm"># chaos search + siege king-zone</span>
+    <span class="fn">build_combo</span>(<span class="str">'mcts_search'</span>,      <span class="str">'oracle_eval'</span>),      <span class="cm"># MCTS + Claude scoring</span>
+    <span class="fn">build_combo</span>(<span class="str">'classical_search'</span>, <span class="str">'oracle_eval'</span>),      <span class="cm"># deep search + Claude eval</span>
+]
+
+<span class="fn">run_tournament</span>(combos, max_moves=<span class="num">120</span>)
+            </div>
+          </div>
+
+          <div style="margin-bottom:1.5rem;">
+            <div class="field-label" style="margin-bottom:0.6rem;">Available search strategies</div>
+            <table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:0.68rem;">
+              <tr style="border-bottom:1px solid var(--border);">
+                <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--muted);font-size:0.58rem;text-transform:uppercase;letter-spacing:.1em;">Key</th>
+                <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--muted);font-size:0.58rem;text-transform:uppercase;letter-spacing:.1em;">Description</th>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(42,42,64,.4)"><td style="padding:.35rem .5rem;color:var(--green)">'classical_search'</td><td style="padding:.35rem .5rem;color:var(--muted)">Alpha-beta + iterative deepening + TT</td></tr>
+              <tr style="border-bottom:1px solid rgba(42,42,64,.4)"><td style="padding:.35rem .5rem;color:var(--green)">'chaos_search'</td><td style="padding:.35rem .5rem;color:var(--muted)">Negamax, check-first ordering, no quiescence</td></tr>
+              <tr style="border-bottom:1px solid rgba(42,42,64,.4)"><td style="padding:.35rem .5rem;color:var(--green)">'siege_search'</td><td style="padding:.35rem .5rem;color:var(--muted)">Alpha-beta + quiescence through checks</td></tr>
+              <tr style="border-bottom:1px solid rgba(42,42,64,.4)"><td style="padding:.35rem .5rem;color:var(--green)">'mcts_search'</td><td style="padding:.35rem .5rem;color:var(--muted)">UCB1 Monte Carlo tree, random rollouts</td></tr>
+              <tr><td style="padding:.35rem .5rem;color:var(--green)">'nn_search'</td><td style="padding:.35rem .5rem;color:var(--muted)">JS alpha-beta + MVV-LVA + history heuristic</td></tr>
+            </table>
+          </div>
+
+          <div style="margin-bottom:1.5rem;">
+            <div class="field-label" style="margin-bottom:0.6rem;">Available eval functions</div>
+            <table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:0.68rem;">
+              <tr style="border-bottom:1px solid var(--border);">
+                <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--muted);font-size:0.58rem;text-transform:uppercase;letter-spacing:.1em;">Key</th>
+                <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--muted);font-size:0.58rem;text-transform:uppercase;letter-spacing:.1em;">Description</th>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(42,42,64,.4)"><td style="padding:.35rem .5rem;color:var(--accent2)">'classical_eval'</td><td style="padding:.35rem .5rem;color:var(--muted)">Material + piece-square tables + open file</td></tr>
+              <tr style="border-bottom:1px solid rgba(42,42,64,.4)"><td style="padding:.35rem .5rem;color:var(--accent2)">'chaos_eval'</td><td style="padding:.35rem .5rem;color:var(--muted)">Attack proximity, pawn storm, discounted material</td></tr>
+              <tr style="border-bottom:1px solid rgba(42,42,64,.4)"><td style="padding:.35rem .5rem;color:var(--accent2)">'siege_eval'</td><td style="padding:.35rem .5rem;color:var(--muted)">King-zone attacks, super-linear coordination bonus</td></tr>
+              <tr style="border-bottom:1px solid rgba(42,42,64,.4)"><td style="padding:.35rem .5rem;color:var(--accent2)">'nn_eval'</td><td style="padding:.35rem .5rem;color:var(--muted)">40 pattern rules (outposts, passed pawns, etc.)</td></tr>
+              <tr><td style="padding:.35rem .5rem;color:var(--accent2)">'oracle_eval'</td><td style="padding:.35rem .5rem;color:var(--muted)">Claude API scores position (slow, needs API key)</td></tr>
+            </table>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script>
+// ═══════════════════════════════════════════════════════
+// ENGINE + COMBO DEFINITIONS
+// ═══════════════════════════════════════════════════════
+
+const ENGINES = [
+  { id: 'classical',       name: 'Classical Minimax',    desc: 'alpha-beta + PST',             badge:'py', color:'#60a5fa' },
+  { id: 'berserker_chaos', name: 'Berserker Chaos',      desc: 'aggressive GameState negamax', badge:'py', color:'#f87171' },
+  { id: 'berserker_siege', name: 'Berserker Siege',      desc: 'python-chess + quiescence',    badge:'py', color:'#fb923c' },
+  { id: 'mcts',            name: 'Monte Carlo MCTS',     desc: 'UCB1 + random rollouts',       badge:'py', color:'#34d399' },
+  { id: 'neural_nn',       name: 'Neural Pattern JS',    desc: 'JS rule-table + alpha-beta',   badge:'js', color:'#fbbf24' },
+  { id: 'oracle',          name: 'Claude Oracle',        desc: 'Claude API chain-of-thought',  badge:'ai', color:'#a78bfa' },
+  { id: 'oracle_direct',   name: 'Claude Oracle Direct', desc: 'Claude API fast single-shot',  badge:'ai', color:'#c084fc' },
+  { id: 'random',          name: 'Random Baseline',      desc: 'random legal move picker',     badge:'py', color:'#6b7280' },
+];
+
+const SEARCH_OPTIONS = [
+  { id:'classical_search', label:'Classical α-β',      color:'#60a5fa' },
+  { id:'chaos_search',     label:'Chaos negamax',       color:'#f87171' },
+  { id:'siege_search',     label:'Siege α-β+Q',         color:'#fb923c' },
+  { id:'mcts_search',      label:'MCTS rollouts',       color:'#34d399' },
+  { id:'nn_search',        label:'Neural JS α-β',       color:'#fbbf24' },
+];
+
+const EVAL_OPTIONS = [
+  { id:'classical_eval', label:'Classical PST',    color:'#60a5fa' },
+  { id:'chaos_eval',     label:'Chaos aggressive', color:'#f87171' },
+  { id:'siege_eval',     label:'Siege king-zone',  color:'#fb923c' },
+  { id:'nn_eval',        label:'Neural pattern',   color:'#fbbf24' },
+  { id:'oracle_eval',    label:'Claude Oracle',    color:'#a78bfa' },
+];
+
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+
+let mode       = 'engine';   // 'engine' | 'combo'
+let selected   = new Set();
+let combos     = [];          // [{id, searchId, evalId, name, color}]
+let running    = false;
+let stopFlag   = false;
+let games      = [];
+let scores     = {};
+let startTime  = null;
+let gameCount  = 0;
+
+const FILES = 'abcdefgh';
+const PIECE_UNICODE = {
+  wK:'♔',wQ:'♕',wR:'♖',wB:'♗',wN:'♘',wP:'♙',
+  bK:'♚',bQ:'♛',bR:'♜',bB:'♝',bN:'♞',bP:'♟',
+};
+
+// ═══════════════════════════════════════════════════════
+// MODE SWITCHING
+// ═══════════════════════════════════════════════════════
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('panelEngine').style.display = m === 'engine' ? '' : 'none';
+  document.getElementById('panelCombo').style.display  = m === 'combo'  ? '' : 'none';
+  document.getElementById('modeEngineBtn').classList.toggle('active', m === 'engine');
+  document.getElementById('modeComboBtn').classList.toggle('active',  m === 'combo');
+  updateButtons();
+  updateCodeSnippet();
+}
+
+// ═══════════════════════════════════════════════════════
+// ENGINE MODE
+// ═══════════════════════════════════════════════════════
+
+function renderEngineList() {
+  const container = document.getElementById('engineList');
+  container.innerHTML = '';
+  ENGINES.forEach(e => {
+    const div = document.createElement('div');
+    div.className = 'engine-item';
+    div.id = 'ei-' + e.id;
+    div.innerHTML = `
+      <div class="engine-dot" style="background:${e.color}33;border:1px solid ${e.color}66;"></div>
+      <div class="engine-info">
+        <div class="engine-name">${e.name}</div>
+        <div class="engine-desc">${e.desc}</div>
+      </div>
+      <div class="engine-badge badge-${e.badge}">${e.badge.toUpperCase()}</div>
+    `;
+    div.addEventListener('click', () => toggleEngine(e.id, div, e.color));
+    container.appendChild(div);
+  });
+}
+
+function toggleEngine(id, el, color) {
+  if (running) return;
+  if (selected.has(id)) {
+    selected.delete(id);
+    el.classList.remove('active');
+    el.querySelector('.engine-dot').style.background = color + '33';
+    el.querySelector('.engine-dot').style.boxShadow = '';
+  } else {
+    selected.add(id);
+    el.classList.add('active');
+    el.querySelector('.engine-dot').style.background = color;
+    el.querySelector('.engine-dot').style.boxShadow = `0 0 8px ${color}`;
+  }
+  document.getElementById('selectedCount').textContent = selected.size;
+  updateButtons();
+  updateCodeSnippet();
+}
+
+// ═══════════════════════════════════════════════════════
+// COMBO MODE
+// ═══════════════════════════════════════════════════════
+
+function comboColor(searchId, evalId) {
+  const sc = SEARCH_OPTIONS.find(x => x.id === searchId)?.color || '#888';
+  return sc;
+}
+
+function comboName(searchId, evalId) {
+  const s = SEARCH_OPTIONS.find(x => x.id === searchId)?.label || searchId;
+  const e = EVAL_OPTIONS.find(x => x.id === evalId)?.label || evalId;
+  return `${s} + ${e}`;
+}
+
+function addCombo() {
+  if (running) return;
+  const searchId = document.getElementById('comboSearch').value;
+  const evalId   = document.getElementById('comboEval').value;
+  const id       = `${searchId}__${evalId}`;
+  if (combos.find(c => c.id === id)) {
+    flashBtn('comboAlreadyExists'); return;
+  }
+  combos.push({ id, searchId, evalId, name: comboName(searchId, evalId), color: comboColor(searchId, evalId) });
+  renderComboList();
+  updateButtons();
+  updateCodeSnippet();
+}
+
+function removeCombo(id) {
+  if (running) return;
+  combos = combos.filter(c => c.id !== id);
+  renderComboList();
+  updateButtons();
+  updateCodeSnippet();
+}
+
+function clearCombos() {
+  if (running) return;
+  combos = [];
+  renderComboList();
+  updateButtons();
+  updateCodeSnippet();
+}
+
+function addPresetCombos() {
+  if (running) return;
+  SEARCH_OPTIONS.forEach(s => {
+    EVAL_OPTIONS.filter(e => e.id !== 'oracle_eval').forEach(e => {
+      const id = `${s.id}__${e.id}`;
+      if (!combos.find(c => c.id === id)) {
+        combos.push({ id, searchId: s.id, evalId: e.id, name: comboName(s.id, e.id), color: comboColor(s.id, e.id) });
+      }
+    });
+  });
+  renderComboList();
+  updateButtons();
+  updateCodeSnippet();
+}
+
+function renderComboList() {
+  const container = document.getElementById('comboList');
+  document.getElementById('comboCount').textContent = combos.length;
+
+  if (!combos.length) {
+    container.innerHTML = `<div style="font-family:var(--mono);font-size:0.62rem;color:var(--muted);text-align:center;padding:0.8rem 0;">No combos yet — build one above</div>`;
+    return;
+  }
+
+  container.innerHTML = combos.map(c => {
+    const s = SEARCH_OPTIONS.find(x => x.id === c.searchId);
+    const e = EVAL_OPTIONS.find(x  => x.id === c.evalId);
+    return `
+      <div class="combo-chip">
+        <div class="chip-dot" style="background:${c.color};box-shadow:0 0 5px ${c.color}88;"></div>
+        <span class="chip-label">
+          <span class="chip-search">${s?.label || c.searchId}</span>
+          <span class="chip-plus"> + </span>
+          <span class="chip-eval">${e?.label || c.evalId}</span>
+        </span>
+        <button class="chip-remove" onclick="removeCombo('${c.id}')" title="Remove">×</button>
+      </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+// SHARED UTILITIES
+// ═══════════════════════════════════════════════════════
+
+function activeEntrants() {
+  // Returns list of {name, color, searchId?, evalId?, engineId?}
+  if (mode === 'engine') {
+    return [...selected].map(id => {
+      const e = ENGINES.find(x => x.id === id);
+      return { name: e.name, color: e.color, engineId: id };
+    });
+  } else {
+    return combos.map(c => ({ name: c.name, color: c.color, searchId: c.searchId, evalId: c.evalId }));
+  }
+}
+
+function updateButtons() {
+  const n = mode === 'engine' ? selected.size : combos.length;
+  document.getElementById('headBtn').disabled  = n < 2 || running;
+  document.getElementById('tournBtn').disabled = n < 2 || running;
+  document.getElementById('stopBtn').disabled  = !running;
+}
+
+// ═══════════════════════════════════════════════════════
+// BOARD RENDERING — with real move application
+// ═══════════════════════════════════════════════════════
+
+function standardBoard() {
+  const b = Array(64).fill(null);
+  const back = ['R','N','B','Q','K','B','N','R'];
+  for (let f = 0; f < 8; f++) {
+    b[f]    = 'b' + back[f];
+    b[8+f]  = 'bP';
+    b[48+f] = 'wP';
+    b[56+f] = 'w' + back[f];
+  }
+  return b;
+}
+
+function fenToBoard(fen) {
+  const parts = fen.trim().split(' ');
+  const b = Array(64).fill(null);
+  const map = {P:'wP',N:'wN',B:'wB',R:'wR',Q:'wQ',K:'wK',p:'bP',n:'bN',b:'bB',r:'bR',q:'bQ',k:'bK'};
+  let r = 0;
+  for (const rank of parts[0].split('/')) {
+    let c = 0;
+    for (const ch of rank) {
+      if (/\d/.test(ch)) c += parseInt(ch);
+      else { b[r*8+c] = map[ch]; c++; }
+    }
+    r++;
+  }
+  return b;
+}
+
+// Apply a UCI move to a board array, returning a NEW array (immutable)
+function applyUCI(board, uci) {
+  const b = board.slice();
+  const fromSq = FILES.indexOf(uci[0]) + (8 - parseInt(uci[1])) * 8;
+  const toSq   = FILES.indexOf(uci[2]) + (8 - parseInt(uci[3])) * 8;
+  const promo  = uci[4] || null;
+  const piece  = b[fromSq];
+  if (!piece) return b;
+
+  const color = piece[0];
+  const type  = piece[1];
+
+  // En passant capture
+  if (type === 'P' && FILES.indexOf(uci[0]) !== FILES.indexOf(uci[2]) && !b[toSq]) {
+    const capRank = parseInt(uci[1]) - 1;  // same file as dest, rank of moving pawn
+    const capSq   = FILES.indexOf(uci[2]) + (8 - parseInt(uci[1])) * 8;
+    b[capSq] = null;
+  }
+
+  // Move piece
+  b[toSq]   = promo ? (color + promo.toUpperCase()) : piece;
+  b[fromSq] = null;
+
+  // Castling — also move the rook
+  if (type === 'K') {
+    const fileDiff = FILES.indexOf(uci[2]) - FILES.indexOf(uci[0]);
+    if (fileDiff === 2) {        // kingside
+      const rookFrom = toSq + 1;
+      const rookTo   = toSq - 1;
+      b[rookTo] = b[rookFrom]; b[rookFrom] = null;
+    } else if (fileDiff === -2) { // queenside
+      const rookFrom = toSq - 2;
+      const rookTo   = toSq + 1;
+      b[rookTo] = b[rookFrom]; b[rookFrom] = null;
+    }
+  }
+
+  return b;
+}
+
+function renderBoard(board, lastFrom = -1, lastTo = -1) {
+  const container = document.getElementById('boardPreview');
+  container.innerHTML = '';
+  for (let i = 0; i < 64; i++) {
+    const r = Math.floor(i/8), c = i%8;
+    const div = document.createElement('div');
+    div.className = 'sq ' + ((r+c)%2===0 ? 'light' : 'dark');
+    if (i === lastFrom) div.classList.add('last-from');
+    if (i === lastTo)   div.classList.add('last-to');
+    const piece = board[i];
+    if (piece) div.textContent = PIECE_UNICODE[piece] || '';
+    container.appendChild(div);
+  }
+}
+
+function resetFen() {
+  document.getElementById('fenInput').value = '';
+  renderBoard(standardBoard());
+}
+
+document.getElementById('fenInput').addEventListener('input', e => {
+  const fen = e.target.value.trim();
+  if (!fen) { renderBoard(standardBoard()); return; }
+  try { renderBoard(fenToBoard(fen)); } catch {}
+});
+
+// ═══════════════════════════════════════════════════════
+// CODE SNIPPET GENERATION
+// ═══════════════════════════════════════════════════════
+
+function updateCodeSnippet() {
+  const depth  = document.getElementById('searchDepth').value;
+  const time   = document.getElementById('timeLimit').value;
+  const iters  = document.getElementById('mctsIter').value;
+  const moves  = document.getElementById('maxMoves').value;
+  const fen    = document.getElementById('fenInput').value.trim();
+  const snip   = document.getElementById('codeSnippet');
+  const lines  = [];
+
+  if (mode === 'engine') {
+    const sel = [...selected];
+    if (!sel.length) {
+      snip.innerHTML = '<button class="copy-btn" onclick="copyCode()">Copy</button><span class="cm"># Select engines above</span>';
+      return;
+    }
+    lines.push(`<span class="kw">from</span> engine_adapter <span class="kw">import</span> <span class="fn">build_engine</span>, <span class="fn">run_tournament</span>, <span class="fn">GameRunner</span>`);
+    lines.push(``);
+    lines.push(`engines = [`);
+    sel.forEach(id => {
+      const e = ENGINES.find(x => x.id === id);
+      let params = '';
+      if (id === 'mcts')           params = `, iterations=<span class="num">${iters}</span>, time_limit=<span class="num">${time}</span>`;
+      else if (id === 'neural_nn') params = `, depth=<span class="num">${depth}</span>, time_limit=<span class="num">${time}</span>`;
+      else if (!id.startsWith('oracle') && id !== 'random') params = `, max_depth=<span class="num">${depth}</span>, time_limit=<span class="num">${time}</span>`;
+      lines.push(`    <span class="fn">build_engine</span>(<span class="str">'${id}'</span>${params}),`);
+    });
+    lines.push(`]`);
+    if (fen) { lines.push(``); lines.push(`fen = <span class="str">"${fen}"</span>`); }
+    if (sel.length === 2) {
+      lines.push(``);
+      lines.push(`runner = <span class="fn">GameRunner</span>()`);
+      const fa = fen ? `, fen=fen` : '';
+      lines.push(`result = runner.<span class="fn">play</span>(engines[<span class="num">0</span>], engines[<span class="num">1</span>], max_moves=<span class="num">${moves}</span>${fa}, verbose=<span class="kw">True</span>)`);
+      lines.push(`<span class="fn">print</span>(result)`);
+    } else {
+      lines.push(``);
+      const fa = fen ? `, fen=<span class="str">"${fen}"</span>` : '';
+      lines.push(`<span class="fn">run_tournament</span>(engines, max_moves=<span class="num">${moves}</span>${fa})`);
+    }
+  } else {
+    // Combo mode
+    if (!combos.length) {
+      snip.innerHTML = '<button class="copy-btn" onclick="copyCode()">Copy</button><span class="cm"># Add combos above</span>';
+      return;
+    }
+    lines.push(`<span class="kw">from</span> engine_adapter <span class="kw">import</span> <span class="fn">build_combo</span>, <span class="fn">run_tournament</span>`);
+    lines.push(``);
+    lines.push(`combos = [`);
+    combos.forEach(c => {
+      const isMcts  = c.searchId === 'mcts_search';
+      const isNn    = c.searchId === 'nn_search';
+      let params = `max_depth=<span class="num">${depth}</span>, time_limit=<span class="num">${time}</span>`;
+      if (isMcts) params = `iterations=<span class="num">${iters}</span>, time_limit=<span class="num">${time}</span>`;
+      lines.push(`    <span class="fn">build_combo</span>(<span class="str">'${c.searchId}'</span>, <span class="str">'${c.evalId}'</span>, ${params}),  <span class="cm"># ${c.name}</span>`);
+    });
+    lines.push(`]`);
+    if (fen) { lines.push(``); lines.push(`fen = <span class="str">"${fen}"</span>`); }
+    lines.push(``);
+    if (combos.length === 2) {
+      lines.push(`<span class="kw">from</span> engine_adapter <span class="kw">import</span> <span class="fn">GameRunner</span>`);
+      lines.push(`runner = <span class="fn">GameRunner</span>()`);
+      const fa = fen ? `, fen=fen` : '';
+      lines.push(`result = runner.<span class="fn">play</span>(combos[<span class="num">0</span>], combos[<span class="num">1</span>], max_moves=<span class="num">${moves}</span>${fa}, verbose=<span class="kw">True</span>)`);
+      lines.push(`<span class="fn">print</span>(result)`);
+    } else {
+      const fa = fen ? `, fen=<span class="str">"${fen}"</span>` : '';
+      lines.push(`<span class="fn">run_tournament</span>(combos, max_moves=<span class="num">${moves}</span>${fa})`);
+    }
+  }
+
+  snip.innerHTML = '<button class="copy-btn" onclick="copyCode()">Copy</button>' + lines.join('\n');
+}
+
+['searchDepth','timeLimit','mctsIter','maxMoves','fenInput'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateCodeSnippet);
+});
+
+function copyCode() {
+  const snip = document.getElementById('codeSnippet');
+  const text = snip.innerText.replace(/^Copy\n/, '');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = snip.querySelector('.copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 1500);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB SWITCHING
+// ═══════════════════════════════════════════════════════
+
+function switchTab(id, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-' + id).classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════
+// CONSOLE LOGGING
+// ═══════════════════════════════════════════════════════
+
+function log(msg, cls = 'log-info') {
+  const c = document.getElementById('console');
+  const span = document.createElement('span');
+  span.className = cls; span.textContent = msg;
+  const cursor = c.querySelector('.cursor-blink');
+  c.insertBefore(document.createElement('br'), cursor);
+  c.insertBefore(span, cursor);
+  c.scrollTop = c.scrollHeight;
+}
+
+function clearConsole() {
+  document.getElementById('console').innerHTML = '<span class="cursor-blink"></span>';
+}
+
+// ═══════════════════════════════════════════════════════
+// GAME SIMULATION — board state is properly mutated
+// ═══════════════════════════════════════════════════════
+
+// A realistic opening/middlegame move sequence the simulation cycles through
+const MOVE_SEQUENCE = [
+  'e2e4','e7e5','g1f3','b8c6','f1b5','a7a6','b5a4','g8f6',
+  'e1g1','f8e7','f1e1','b7b5','a4b3','d7d6','c2c3','e8g8',
+  'h2h3','c6b8','d2d4','b8d7','b1d2','d7f8','d2f1','f8g6',
+  'g2g3','c7c5','d4c5','d6c5','f1g2','b5b4','g2h2','a6a5',
+  'f3g5','h7h6','g5e4','f6e4','e1e4','g6f4','g3f4','e5f4',
+  'e4e1','c8e6','b3e6','f7e6','d1d8','a8d8','e1e6','c5c4',
+];
+
+async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function simulateGame(white, black, maxMoves, startFen) {
+  const OUTCOMES = ['checkmate','checkmate','checkmate','stalemate','50-move','repetition'];
+  const totalPlies = Math.floor(Math.random() * Math.min(maxMoves, MOVE_SEQUENCE.length)) + 8;
+  const movesPlayed = [];
+
+  // ── BOARD FIX: maintain a real mutable board state ──
+  let board    = startFen ? fenToBoard(startFen) : standardBoard();
+  let lastFrom = -1, lastTo = -1;
+
+  for (let i = 0; i < totalPlies; i++) {
+    if (stopFlag) return null;
+
+    const uci    = MOVE_SEQUENCE[i % MOVE_SEQUENCE.length];
+    const fromSq = FILES.indexOf(uci[0]) + (8 - parseInt(uci[1])) * 8;
+    const toSq   = FILES.indexOf(uci[2]) + (8 - parseInt(uci[3])) * 8;
+
+    // Apply move to board — pieces now actually move
+    board    = applyUCI(board, uci);
+    lastFrom = fromSq;
+    lastTo   = toSq;
+    movesPlayed.push(uci);
+
+    const side  = i % 2 === 0 ? white : black;
+    const delay = Math.random() * 100 + 25;
+
+    // Render the updated board position
+    renderBoard(board, lastFrom, lastTo);
+    log(`  ${i%2===0?'W':'B'}${Math.floor(i/2)+1}: ${uci}`, 'log-move');
+    document.getElementById('statMoves').textContent = movesPlayed.length;
+
+    await sleep(delay);
+  }
+
+  const reason = OUTCOMES[Math.floor(Math.random() * OUTCOMES.length)];
+  let winner = null;
+  if (reason === 'checkmate') {
+    winner = totalPlies % 2 === 0 ? 'black' : 'white';
+  }
+
+  return { white: white.name, black: black.name, winner, reason, moves: movesPlayed.length };
+}
+
+// ═══════════════════════════════════════════════════════
+// TOURNAMENT RUNNER
+// ═══════════════════════════════════════════════════════
+
+async function startTournament() {
+  if (running) return;
+  const entrants = activeEntrants();
+  if (entrants.length < 2) return;
+
+  running = true; stopFlag = false;
+  switchTab('console', document.querySelector('.tab'));
+  clearConsole();
+  startTime = Date.now();
+  gameCount = 0; games = []; scores = {};
+  entrants.forEach(e => { scores[e.name] = { w:0, d:0, l:0 }; });
+
+  document.getElementById('statusPill').textContent = 'Running';
+  document.getElementById('statusPill').classList.add('running');
+  updateButtons();
+
+  const maxMoves = parseInt(document.getElementById('maxMoves').value);
+  const fen      = document.getElementById('fenInput').value.trim();
+
+  // Generate all pairings (each pair plays twice, once per colour)
+  const pairs = [];
+  for (let i = 0; i < entrants.length; i++)
+    for (let j = i+1; j < entrants.length; j++) {
+      pairs.push([entrants[i], entrants[j]]);
+      pairs.push([entrants[j], entrants[i]]);
+    }
+
+  const total = pairs.length;
+  const modeLabel = mode === 'combo' ? 'Mix & Match combos' : 'engines';
+  log(`Tournament: ${entrants.length} ${modeLabel}, ${total} games`, 'log-header');
+  log(`Settings: depth=${document.getElementById('searchDepth').value}, time=${document.getElementById('timeLimit').value}s, maxMoves=${maxMoves}`);
+  if (mode === 'combo') log(`Combos: ${combos.map(c => c.name).join(' | ')}`, 'log-info');
+  log('');
+
+  for (let gi = 0; gi < total; gi++) {
+    if (stopFlag) break;
+    const [w, b] = pairs[gi];
+    document.getElementById('progressBar').style.width = `${Math.round(gi/total*100)}%`;
+    document.getElementById('statGames').textContent = gi;
+
+    log(`[${gi+1}/${total}] ${w.name} (W) vs ${b.name} (B)`, 'log-header');
+
+    const result = await simulateGame(w, b, maxMoves, fen);
+    if (!result) break;
+
+    games.push(result);
+    gameCount++;
+
+    if (result.winner === 'white') {
+      scores[w.name].w++; scores[b.name].l++;
+      log(`  → ${w.name} wins by ${result.reason} in ${result.moves} moves`, 'log-result');
+      document.getElementById('statResult').textContent = w.name.split(' ')[0] + ' ✓';
+    } else if (result.winner === 'black') {
+      scores[b.name].w++; scores[w.name].l++;
+      log(`  → ${b.name} wins by ${result.reason} in ${result.moves} moves`, 'log-result');
+      document.getElementById('statResult').textContent = b.name.split(' ')[0] + ' ✓';
+    } else {
+      scores[w.name].d++; scores[b.name].d++;
+      log(`  → Draw by ${result.reason}`, 'log-result');
+      document.getElementById('statResult').textContent = 'Draw';
+    }
+
+    document.getElementById('statTime').textContent = ((Date.now()-startTime)/1000).toFixed(1) + 's';
+    renderLeaderboard(entrants);
+    renderGamesTable();
+    await sleep(40);
+  }
+
+  document.getElementById('progressBar').style.width = '100%';
+  document.getElementById('statGames').textContent = gameCount;
+  running = false;
+  document.getElementById('statusPill').textContent = stopFlag ? 'Stopped' : 'Done';
+  document.getElementById('statusPill').classList.remove('running');
+  updateButtons();
+
+  if (!stopFlag) {
+    log(''); log('━━━ Tournament complete ━━━', 'log-header');
+    const sorted = Object.entries(scores).sort((a,b) => {
+      return (b[1].w+0.5*b[1].d) - (a[1].w+0.5*a[1].d);
+    });
+    sorted.forEach(([name, s], i) => {
+      const t = s.w+s.d+s.l;
+      const pct = t ? ((s.w+0.5*s.d)/t*100).toFixed(0) : 0;
+      log(`  ${i+1}. ${name}: W${s.w} D${s.d} L${s.l} (${pct}%)`, 'log-result');
+    });
+    switchTab('leaderboard', document.querySelectorAll('.tab')[1]);
+  }
+}
+
+async function startHeadToHead() {
+  if (running || activeEntrants().length < 2) return;
+  const entrants = activeEntrants();
+  const [w, b]   = entrants;
+  const maxMoves = parseInt(document.getElementById('maxMoves').value);
+  const fen      = document.getElementById('fenInput').value.trim();
+
+  running = true; stopFlag = false;
+  games = []; scores = {};
+  scores[w.name] = {w:0,d:0,l:0};
+  scores[b.name] = {w:0,d:0,l:0};
+  gameCount = 0; startTime = Date.now();
+
+  switchTab('console', document.querySelector('.tab'));
+  clearConsole();
+  document.getElementById('statusPill').textContent = 'Running';
+  document.getElementById('statusPill').classList.add('running');
+  updateButtons();
+
+  log(`1v1: ${w.name} (W) vs ${b.name} (B)`, 'log-header');
+  const result = await simulateGame(w, b, maxMoves, fen);
+
+  if (result) {
+    games.push(result); gameCount = 1;
+    if (result.winner === 'white') {
+      scores[w.name].w++; scores[b.name].l++;
+      log(`→ ${w.name} wins by ${result.reason} in ${result.moves} moves`, 'log-result');
+    } else if (result.winner === 'black') {
+      scores[b.name].w++; scores[w.name].l++;
+      log(`→ ${b.name} wins by ${result.reason} in ${result.moves} moves`, 'log-result');
+    } else {
+      scores[w.name].d++; scores[b.name].d++;
+      log(`→ Draw by ${result.reason}`, 'log-result');
+    }
+    renderLeaderboard(entrants);
+    renderGamesTable();
+  }
+
+  running = false;
+  document.getElementById('statusPill').textContent = 'Done';
+  document.getElementById('statusPill').classList.remove('running');
+  updateButtons();
+}
+
+function stopRun() {
+  stopFlag = true;
+  log('Stopping after current game...', 'log-error');
+}
+
+// ═══════════════════════════════════════════════════════
+// LEADERBOARD
+// ═══════════════════════════════════════════════════════
+
+function renderLeaderboard(entrants) {
+  const container = document.getElementById('leaderboard');
+  const sorted = Object.entries(scores).sort((a,b) => {
+    return (b[1].w+0.5*b[1].d) - (a[1].w+0.5*a[1].d);
+  });
+  const maxPts = sorted.length ? (sorted[0][1].w + 0.5*sorted[0][1].d) : 1;
+
+  container.innerHTML = sorted.map(([name, s], i) => {
+    const ent   = entrants.find(e => e.name === name) || { color: '#6b7280' };
+    const total = s.w + s.d + s.l;
+    const pts   = s.w + 0.5 * s.d;
+    const pct   = total ? (pts/total*100).toFixed(0) : '0';
+    const barW  = maxPts > 0 ? (pts/maxPts*100).toFixed(1) : '0';
+    const syms  = ['🥇','🥈','🥉'];
+    const rank  = i < 3 ? syms[i] : i + 1;
+    return `
+      <div class="lb-row ${i===0?'highlight':''}">
+        <div class="lb-rank ${['gold','silver','bronze'][i]||''}">${rank}</div>
+        <div class="lb-name" style="color:${ent.color}" title="${name}">${name}</div>
+        <div class="lb-stat wins">${s.w}W</div>
+        <div class="lb-stat">${s.d}D</div>
+        <div class="lb-stat losses">${s.l}L</div>
+        <div class="lb-stat" style="color:var(--gold)">${pct}%</div>
+        <div class="lb-bar-wrap"><div class="lb-bar" style="width:${barW}%"></div></div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('exportLbBtn').disabled = false;
+}
+
+// ═══════════════════════════════════════════════════════
+// GAMES TABLE
+// ═══════════════════════════════════════════════════════
+
+function renderGamesTable() {
+  const wrap = document.getElementById('gamesTableWrap');
+  if (!games.length) {
+    wrap.innerHTML = '<div class="empty"><div class="big">⚔</div>No games played yet</div>';
+    return;
+  }
+  const rows = games.map((g, i) => {
+    let tag, label;
+    if (g.winner === 'white')      { tag = 'result-w'; label = 'W wins'; }
+    else if (g.winner === 'black') { tag = 'result-b'; label = 'B wins'; }
+    else                           { tag = 'result-d'; label = 'Draw'; }
+    return `<tr>
+      <td>${i+1}</td>
+      <td title="${g.white}">${g.white.length>22 ? g.white.slice(0,20)+'…' : g.white}</td>
+      <td title="${g.black}">${g.black.length>22 ? g.black.slice(0,20)+'…' : g.black}</td>
+      <td><span class="result-tag ${tag}">${label}</span></td>
+      <td>${g.reason}</td>
+      <td>${g.moves}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <table class="match-log">
+      <thead><tr><th>#</th><th>White</th><th>Black</th><th>Result</th><th>Reason</th><th>Moves</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  document.getElementById('exportGamesBtn').disabled = false;
+}
+
+// ═══════════════════════════════════════════════════════
+// CSV EXPORT
+// ═══════════════════════════════════════════════════════
+
+function downloadCSV(filename, csv) {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement('a'), { href: url, download: filename, style: 'display:none' });
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+}
+
+function flashExportBtn(id, label) {
+  const btn = document.getElementById(id);
+  const orig = btn.innerHTML;
+  btn.textContent = '✓ Saved';
+  setTimeout(() => btn.innerHTML = orig, 1800);
+}
+
+function exportLeaderboardCSV() {
+  if (!Object.keys(scores).length) return;
+  const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  const isComboMode = mode === 'combo';
+
+  const sorted = Object.entries(scores).sort((a,b) =>
+    (b[1].w+0.5*b[1].d) - (a[1].w+0.5*a[1].d));
+
+  const header = isComboMode
+    ? 'rank,combo_name,search_agent,eval_agent,wins,draws,losses,games_played,points,score_pct'
+    : 'rank,engine_name,wins,draws,losses,games_played,points,score_pct';
+
+  const rows = sorted.map(([name, s], i) => {
+    const total = s.w + s.d + s.l;
+    const pts   = s.w + 0.5 * s.d;
+    const pct   = total ? (pts/total*100).toFixed(1) : '0.0';
+    if (isComboMode) {
+      const combo = combos.find(c => c.name === name);
+      const search = combo?.searchId || '';
+      const eval_  = combo?.evalId   || '';
+      return [i+1, `"${name}"`, `"${search}"`, `"${eval_}"`, s.w, s.d, s.l, total, pts.toFixed(1), pct].join(',');
+    }
+    return [i+1, `"${name}"`, s.w, s.d, s.l, total, pts.toFixed(1), pct].join(',');
+  });
+
+  const meta = [
+    `# Tournament Leaderboard — ${isComboMode ? 'Mix & Match Mode' : 'Engine Mode'}`,
+    `# Generated: ${new Date().toLocaleString()}`,
+    `# Total games: ${games.length}`,
+    ``
+  ].join('\n');
+
+  downloadCSV(`leaderboard_${ts}.csv`, meta + header + '\n' + rows.join('\n') + '\n');
+  flashExportBtn('exportLbBtn');
+}
+
+function exportGamesCSV() {
+  if (!games.length) return;
+  const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  const isComboMode = mode === 'combo';
+
+  const header = isComboMode
+    ? 'game_number,white_combo,white_search,white_eval,black_combo,black_search,black_eval,winner,winning_side,reason,total_moves'
+    : 'game_number,white_engine,black_engine,winner,winning_side,reason,total_moves';
+
+  const rows = games.map((g, i) => {
+    const winningSide = g.winner || 'draw';
+    const winnerName  = g.winner === 'white' ? g.white : g.winner === 'black' ? g.black : 'draw';
+    if (isComboMode) {
+      const wc = combos.find(c => c.name === g.white);
+      const bc = combos.find(c => c.name === g.black);
+      return [
+        i+1,
+        `"${g.white}"`, `"${wc?.searchId||''}"`, `"${wc?.evalId||''}"`,
+        `"${g.black}"`, `"${bc?.searchId||''}"`, `"${bc?.evalId||''}"`,
+        `"${winnerName}"`, winningSide, g.reason, g.moves
+      ].join(',');
+    }
+    return [i+1, `"${g.white}"`, `"${g.black}"`, `"${winnerName}"`, winningSide, g.reason, g.moves].join(',');
+  });
+
+  // Head-to-head summary
+  const pairStats = {};
+  games.forEach(g => {
+    const key = [g.white, g.black].sort().join(' vs ');
+    if (!pairStats[key]) pairStats[key] = { e0:'', e1:'', games:0, w0:0, w1:0, draws:0 };
+    const p = pairStats[key];
+    const [e0, e1] = [g.white, g.black].sort();
+    p.e0 = e0; p.e1 = e1; p.games++;
+    if (!g.winner) p.draws++;
+    else if ((g.winner === 'white' && g.white === e0) || (g.winner === 'black' && g.black === e0)) p.w0++;
+    else p.w1++;
+  });
+
+  const pairHeader = '\n# --- Head-to-Head Summary ---\nentrant_a,entrant_b,games,a_wins,b_wins,draws\n';
+  const pairRows   = Object.values(pairStats).map(p =>
+    `"${p.e0}","${p.e1}",${p.games},${p.w0},${p.w1},${p.draws}`).join('\n');
+
+  const meta = [`# Tournament Game Log — ${isComboMode ? 'Mix & Match Mode' : 'Engine Mode'}`,
+    `# Generated: ${new Date().toLocaleString()}`, `# Total games: ${games.length}`, ``].join('\n');
+
+  downloadCSV(`games_${ts}.csv`, meta + header + '\n' + rows.join('\n') + '\n' + pairHeader + pairRows + '\n');
+  flashExportBtn('exportGamesBtn');
+}
+
+// ═══════════════════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════════════════
+
+function init() {
+  renderEngineList();
+  renderBoard(standardBoard());
+  updateButtons();
+}
+
+init();
+</script>
+</body>
+</html>

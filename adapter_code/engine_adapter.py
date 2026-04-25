@@ -844,7 +844,7 @@ def build_combo(
         'classical_search'   alpha-beta + iterative deepening + TT
         'chaos_search'       aggressive negamax, check-first ordering, no quiescence
         'siege_search'       alpha-beta + quiescence through captures and checks
-        'mcts_search'        UCB1 Monte Carlo tree + random rollouts (ignores eval_fn)
+        'mcts_search'        UCB1 Monte Carlo tree + eval-driven leaf values
         'nn_search'          JS alpha-beta via subprocess (ignores eval_fn, uses nn_eval)
 
     eval_fn options:
@@ -858,7 +858,7 @@ def build_combo(
         build_combo('siege_search', 'chaos_eval')         # siege discipline + chaos aggression
         build_combo('classical_search', 'oracle_eval')    # deep search + Claude scoring
         build_combo('chaos_search', 'siege_eval')         # chaos tree + king-zone awareness
-        build_combo('mcts_search',  'classical_eval')     # MCTS with material rollout scoring
+        build_combo('mcts_search',  'classical_eval')     # MCTS leaf values from classical eval
     """
     name = f"{search.replace('_search','')} + {eval_fn.replace('_eval','')}"
 
@@ -994,51 +994,44 @@ def build_combo(
                              f'Siege α-β+Q + {eval_fn}')
 
     if search == 'mcts_search':
-        # MCTS doesn't use a traditional eval — it uses rollouts.
-        # When paired with an eval function, we use the eval as the rollout scorer:
-        # instead of playing to terminal, we score the position after N random moves.
+        # Option 2: value-function MCTS.
+        # For expanded leaves we skip rollouts and backpropagate an eval-derived value.
         mcts_dir = str(ENGINES_DIR / 'monte_carlo_mcts')
         if mcts_dir not in sys.path: sys.path.insert(0, mcts_dir)
         import mcts_search    as _ms_mod
-        import mcts_rollout   as _mr_mod
-        import mcts_move_gen  as _mmg_mod
 
         resolved_eval = _get_eval()
         iterations    = kwargs.get('iterations', 400)
+        eval_center_cp = float(kwargs.get('eval_center_cp', 0.0))
+        eval_scale_cp  = float(kwargs.get('eval_scale_cp', 1200.0))
+
+        def _cp_to_unit_interval(score_cp: float) -> float:
+            # Smooth mapping from centipawns -> [0,1], centered at eval_center_cp.
+            # scale controls slope: larger = flatter, smaller = more decisive.
+            z = (score_cp - eval_center_cp) / max(1e-9, eval_scale_cp)
+            return 0.5 * (1.0 + math.tanh(z))
 
         def mcts_combo_search(state: BoardState):
             gs = _fen_to_mcts_gamestate(_to_fen(state))
-
-            # Replace the rollout policy with our eval-based scorer
-            def eval_rollout(gs_inner, max_plies=8):
-                """Short rollout then eval, instead of play-to-terminal."""
-                current = gs_inner
-                for _ in range(max_plies):
-                    if _mr_mod.is_terminal(current):
-                        return _mr_mod.game_result(current)
-                    move = _mr_mod.fast_random_move(current)
-                    if move is None: break
-                    current = _mmg_mod.make_move(current, move)
-                # Score with eval
-                fen_str = _chaos_gs_to_fen(current)  # reuse FEN converter
+            def leaf_value(gs_inner):
+                fen_str = _chaos_gs_to_fen(gs_inner)  # shared GameState -> FEN helper
                 bs = parse_fen(fen_str)
-                raw = resolved_eval(bs)
-                # Normalise centipawns → [0,1]: 0=black winning, 1=white winning
-                return min(1.0, max(0.0, (raw + 1500) / 3000))
+                raw_cp = float(resolved_eval(bs))
+                return _cp_to_unit_interval(raw_cp)
 
-            orig_rollout = _mr_mod.rollout
-            _mr_mod.rollout = eval_rollout
-            try:
-                r = _ms_mod.mcts_search(gs, max_iter=iterations,
-                                        movetime_ms=int(time_limit*1000), verbose=False)
-            finally:
-                _mr_mod.rollout = orig_rollout
+            r = _ms_mod.mcts_search(
+                gs,
+                max_iter=iterations,
+                movetime_ms=int(time_limit*1000),
+                verbose=False,
+                leaf_value_fn=leaf_value,
+            )
             if r.best_move is None:
                 return _fallback(state)
             return _resolve_uci(state, r.best_uci)
 
         return EngineAdapter(name, mcts_combo_search,
-                             f'MCTS + {eval_fn} rollout scorer')
+                             f'MCTS value-function + {eval_fn}')
 
     if search == 'nn_search':
         # JS search always uses JS eval internally — we can't easily inject Python
