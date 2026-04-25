@@ -152,6 +152,10 @@ class Layer3Result:
     scenario_profile: ScenarioProfile
     agreement_profile: AgreementProfile
     short_circuit: bool
+    # Carried forward so the quality scorer can do counterfactual updates
+    # over every engine's bid, not just the chosen one. Defaulted to []
+    # so external callers stay backward compatible.
+    proposals: list = field(default_factory=list)
 
 
 class ScenarioTrustMatrix:
@@ -408,6 +412,7 @@ class Layer3Ensemble:
                 scenario_profile=scenarios,
                 agreement_profile=agreement,
                 short_circuit=True,
+                proposals=list(proposals),
             )
 
         logits = []
@@ -442,6 +447,7 @@ class Layer3Ensemble:
             scenario_profile=scenarios,
             agreement_profile=agreement,
             short_circuit=False,
+            proposals=list(proposals),
         )
 
     def update(self, engine_id: str, scenario_profile: ScenarioProfile, quality: float, autosave: bool = True) -> None:
