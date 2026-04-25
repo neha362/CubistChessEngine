@@ -813,6 +813,7 @@
       <div class="tab-bar">
         <div class="tab active" onclick="switchTab('console',this)">Console</div>
         <div class="tab" onclick="switchTab('leaderboard',this)">Leaderboard</div>
+        <div class="tab" onclick="switchTab('trust',this)">Trust Matrix</div>
         <div class="tab" onclick="switchTab('games',this)">Games</div>
         <div class="tab" onclick="switchTab('usage',this)">How to Use</div>
       </div>
@@ -844,6 +845,29 @@
         </div>
         <div class="leaderboard" id="leaderboard">
           <div class="empty"><div class="big">&#9817;</div>Run a tournament to see rankings</div>
+        </div>
+      </div>
+
+      <!-- Trust Matrix tab -->
+      <div class="tab-content" id="tab-trust">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem;">
+          <span class="card-title">Online Trust Training</span>
+          <div style="display:flex;gap:0.5rem;">
+            <button class="btn btn-secondary" onclick="fetchTrustMatrix()" style="width:auto;padding:0.35rem 0.8rem;font-size:0.65rem;">
+              Refresh
+            </button>
+            <button class="btn btn-secondary" onclick="resetTrustMatrix()" style="width:auto;padding:0.35rem 0.8rem;font-size:0.65rem;">
+              Reset Matrix
+            </button>
+          </div>
+        </div>
+        <div class="code-snippet" style="margin-bottom:0.8rem;">
+          The tournament trains the same Layer 3 trust matrix used by the ensemble.
+          After each finished game, every played move is scored against the reference engine and
+          the move's scenario profile updates the row for the engine that made it.
+        </div>
+        <div class="table-wrap" id="trustMatrixWrap">
+          <div class="empty"><div class="big">&#9859;</div>No trust data yet</div>
         </div>
       </div>
 
@@ -981,6 +1005,7 @@ let games      = [];
 let scores     = {};
 let startTime  = null;
 let gameCount  = 0;
+let trustState = null;
 const API_BASE = 'http://127.0.0.1:8765';
 
 const FILES = 'abcdefgh';
@@ -1353,6 +1378,69 @@ function switchTab(id, el) {
   document.getElementById('tab-' + id).classList.add('active');
 }
 
+async function fetchTrustMatrix(silent = false) {
+  try {
+    const resp = await fetch(`${API_BASE}/trust`);
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+    trustState = data.trust;
+    renderTrustMatrix();
+    if (!silent) log('Trust matrix refreshed', 'log-info');
+  } catch (e) {
+    if (!silent) log(`Trust fetch failed: ${e.message || e}`, 'log-error');
+  }
+}
+
+async function resetTrustMatrix() {
+  try {
+    const resp = await fetch(`${API_BASE}/trust/reset`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+    trustState = data.trust;
+    renderTrustMatrix();
+    log('Trust matrix reset', 'log-result');
+  } catch (e) {
+    log(`Trust reset failed: ${e.message || e}`, 'log-error');
+  }
+}
+
+function applyTrustTraining(summary) {
+  if (!summary) return;
+  trustState = summary.trust || trustState;
+  renderTrustMatrix();
+  const engines = Object.entries(summary.per_engine_avg || {})
+    .map(([name, avg]) => `${name}=${avg.toFixed(3)}`)
+    .join(' | ');
+  if (summary.moves_trained) {
+    log(`  trust updated: ${summary.moves_trained} moves scored @ depth ${summary.reference_depth}`, 'log-info');
+    if (engines) log(`  averages: ${engines}`, 'log-info');
+  }
+}
+
+function renderTrustMatrix() {
+  const wrap = document.getElementById('trustMatrixWrap');
+  if (!trustState || !trustState.engines || !trustState.engines.length) {
+    wrap.innerHTML = '<div class="empty"><div class="big">♙</div>No trust data yet</div>';
+    return;
+  }
+  const scenarios = trustState.scenario_names || [];
+  const matrix = trustState.matrix || {};
+  const header = scenarios.map(name => `<th>${name}</th>`).join('');
+  const rows = trustState.engines.map(engineId => {
+    const row = matrix[engineId] || {};
+    const cells = scenarios.map(name => {
+      const mean = row[name]?.mean ?? 0.5;
+      return `<td>${mean.toFixed(3)}</td>`;
+    }).join('');
+    return `<tr><td title="${engineId}">${engineId}</td>${cells}</tr>`;
+  }).join('');
+  wrap.innerHTML = `
+    <table class="match-log">
+      <thead><tr><th>Engine</th>${header}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 // ═══════════════════════════════════════════════════════
 // CONSOLE LOGGING
 // ═══════════════════════════════════════════════════════
@@ -1440,6 +1528,7 @@ async function playRealGame(white, black, maxMoves, startFen) {
     winner: g.winner,
     reason: g.reason || 'unknown',
     moves: g.moves || moves.length || 0,
+    trust_training: g && data.trust_training ? data.trust_training : null,
   };
 }
 
@@ -1502,6 +1591,7 @@ async function startTournament() {
 
     games.push(result);
     gameCount++;
+    applyTrustTraining(result.trust_training);
 
     if (result.winner === 'white') {
       scores[w.name].w++; scores[b.name].l++;
@@ -1575,6 +1665,7 @@ async function startHeadToHead() {
 
   if (result) {
     games.push(result); gameCount = 1;
+    applyTrustTraining(result.trust_training);
     if (result.winner === 'white') {
       scores[w.name].w++; scores[b.name].l++;
       log(`→ ${w.name} wins by ${result.reason} in ${result.moves} moves`, 'log-result');
@@ -1781,6 +1872,7 @@ function init() {
   renderEngineList();
   renderBoard(standardBoard());
   updateButtons();
+  fetchTrustMatrix(true);
 }
 
 init();

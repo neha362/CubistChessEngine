@@ -15,8 +15,17 @@ if CLASSICAL_ROOT.exists():
     classical_str = str(CLASSICAL_ROOT)
     if classical_str not in sys.path:
         sys.path.insert(0, classical_str)
+SCENARIOS_ROOT = REPO_ROOT / "scenarios"
+if SCENARIOS_ROOT.exists():
+    scenarios_str = str(SCENARIOS_ROOT)
+    if scenarios_str not in sys.path:
+        sys.path.insert(0, scenarios_str)
 
 from engine_adapter import GameRunner, build_combo, build_engine
+from tournament_trust_bridge import DEFAULT_TRUST_PATH, TournamentTrustBridge
+
+
+TRUST_BRIDGE = TournamentTrustBridge(persistence_path=DEFAULT_TRUST_PATH)
 
 
 def _engine_kwargs(engine_id: str, depth: int, time_limit: float, mcts_iter: int) -> Dict[str, Any]:
@@ -89,10 +98,34 @@ class TournamentApiHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if self.path.rstrip("/") == "/trust":
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "trust": TRUST_BRIDGE.snapshot(),
+                },
+            )
+            return
         self._send_json(404, {"ok": False, "error": "Not found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path.rstrip("/") != "/play":
+        route = self.path.rstrip("/")
+        if route == "/trust/reset":
+            try:
+                TRUST_BRIDGE.reset()
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "trust": TRUST_BRIDGE.snapshot(),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(500, {"ok": False, "error": str(exc), "traceback": traceback.format_exc(limit=6)})
+            return
+
+        if route != "/play":
             self._send_json(404, {"ok": False, "error": "Not found"})
             return
         try:
@@ -118,6 +151,13 @@ class TournamentApiHandler(BaseHTTPRequestHandler):
 
             runner = GameRunner()
             game = runner.play(white_adapter, black_adapter, fen=fen, max_moves=max_moves, verbose=False)
+            trust_training = TRUST_BRIDGE.train_from_game(
+                start_fen=fen,
+                uci_moves=list(game.moves),
+                white_engine_id=white_entry.get("name", white_adapter.name),
+                black_engine_id=black_entry.get("name", black_adapter.name),
+                autosave=True,
+            )
 
             self._send_json(
                 200,
@@ -132,6 +172,7 @@ class TournamentApiHandler(BaseHTTPRequestHandler):
                         "uci_moves": list(game.moves),
                         "final_fen": game.final_fen,
                     },
+                    "trust_training": trust_training,
                 },
             )
         except Exception as exc:  # noqa: BLE001
@@ -153,7 +194,7 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), TournamentApiHandler)
     print(f"Tournament API listening on http://{args.host}:{args.port}")
-    print("Endpoints: GET /health, POST /play")
+    print("Endpoints: GET /health, GET /trust, POST /play, POST /trust/reset")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

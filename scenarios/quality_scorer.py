@@ -67,7 +67,8 @@ def _get_reference():
         from classical_eval import EvalAgent
         from classical_search import SearchAgent
         ev = EvalAgent()
-        sa = SearchAgent(eval_fn=ev.evaluate, max_depth=REFERENCE_DEPTH, time_limit=2.0)
+        mg = MoveGenAgent()
+        sa = SearchAgent(eval_fn=ev.evaluate, move_gen=mg)
         _reference = (sa, ev)
     return _reference
 
@@ -98,10 +99,7 @@ def score_move_quality(fen_before: str, played_uci: str,
 
     # Get the reference engine's best move.
     try:
-        sa.max_depth = depth
-        from move_gen_agent import parse_fen
-        ref_best_move, _ref_score, _pv = sa.search(parse_fen(fen_before))
-        ref_best = None if ref_best_move is None else chess.Move.from_uci(ref_best_move.uci())
+        ref_best = sa.best_move(board.copy(stack=False), depth)
     except Exception:
         return 0.5  # reference crashed; no useful signal
     if ref_best is None:
