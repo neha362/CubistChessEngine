@@ -65,7 +65,7 @@ from movegen_agent import (  # noqa: E402
     GameState, from_fen, STARTPOS, all_legal_moves, make_move, is_terminal,
     game_result, sq_name,
 )
-from adapters.engine_wrappers import gather_proposals, ENGINE_REGISTRY, tuple_to_uci  # noqa: E402
+from ensemble_adapters.engine_wrappers import gather_proposals, ENGINE_REGISTRY, tuple_to_uci  # noqa: E402
 
 
 TRUST_PATH = str(REPO_ROOT / "scenarios" / "cubist_trust.json")
