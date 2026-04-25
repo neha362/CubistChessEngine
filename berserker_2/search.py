@@ -48,6 +48,9 @@ class _TT:
     def probe(self, key):
         return self.table.get(key)
 
+    def clear(self) -> None:
+        self.table.clear()
+
 
 class _Timeout(Exception):
     """Raised deep in search to unwind back to iterative-deepening control."""
@@ -77,10 +80,14 @@ class Search:
         evaluator,
         time_limit: float = 3.0,
         max_depth: int = 64,
+        quiet: bool = False,
     ) -> Tuple[Optional[chess.Move], int]:
         """
         Iterative deepening main loop. Each completed depth gives us a better
         move; we return the deepest fully-completed result when time expires.
+
+        If ``quiet`` is True, UCI-style ``info`` progress lines are not printed
+        (e.g. when the search is used from automated games).
         """
         self.nodes = 0
         self.start_time = time.time()
@@ -99,7 +106,8 @@ class Search:
                 if entry is not None and entry[3] is not None:
                     best_move = entry[3]
                     best_score = score
-                self._emit_info(depth, best_score, best_move)
+                if not quiet:
+                    self._emit_info(depth, best_score, best_move)
             except _Timeout:
                 break
             # Found a mate? No need to search deeper.
@@ -107,6 +115,53 @@ class Search:
                 break
 
         return best_move, best_score
+
+    def root_all_scores(
+        self,
+        board: chess.Board,
+        move_gen,
+        evaluator,
+        max_depth: int,
+        time_limit: float = 120.0,
+    ) -> tuple[list[tuple[chess.Move, int]], Optional[chess.Move], int]:
+        """
+        Return (per-move results, best move, best score) for the side to move.
+        **Expected centipawn loss** for a move m is ``best_score - score(m)``.
+        """
+        legal = list(board.legal_moves)
+        if not legal:
+            return [], None, 0
+        if max_depth < 1:
+            raise ValueError("max_depth must be >= 1")
+        self.tt.clear()
+        self.nodes = 0
+        self.start_time = time.time()
+        self.time_limit = time_limit
+        per_move: list[tuple[chess.Move, int]] = []
+        best_move: Optional[chess.Move] = None
+        best_score = -INFINITY
+        for m in legal:
+            board.push(m)
+            try:
+                sc = -self._negamax(
+                    board,
+                    max_depth - 1,
+                    -INFINITY,
+                    INFINITY,
+                    1,
+                    move_gen,
+                    evaluator,
+                )
+            except _Timeout:
+                sc = -INFINITY
+            board.pop()
+            per_move.append((m, int(sc)))
+            if sc > best_score:
+                best_score = int(sc)
+                best_move = m
+        if best_move is None:
+            best_move = legal[0]
+        return per_move, best_move, int(best_score)
 
     # --------------------------------------------------------------- internals
     def _time_up(self) -> bool:

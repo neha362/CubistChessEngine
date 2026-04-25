@@ -1,1 +1,7 @@
 python-chess>=1.10.0
+# Notebook + analysis (tournament_analysis.ipynb)
+jupyter
+ipykernel
+numpy
+pandas
+matplotlib

@@ -117,6 +117,39 @@ class SearchAgent:
 
         return best
 
+    def root_all_scores(
+        self, board: chess.Board, max_depth: int
+    ) -> tuple[list[tuple[chess.Move, int]], chess.Move, int]:
+        """
+        Score every legal move from the **side-to-move** perspective (``max_depth``-ply look-ahead
+        to the quiescent leaf, same convention as :meth:`best_move`).
+
+        **Expected centipawn loss** for a move is ``best_score - score`` (0 for a best line).
+        """
+        legal = self._move_gen.generate_moves(board)
+        if not legal:
+            raise ValueError("no legal moves in position")
+        if max_depth < 1:
+            raise ValueError("max_depth must be >= 1")
+        self._tt.clear()
+        per_move: list[tuple[chess.Move, int]] = []
+        best_move: chess.Move = legal[0]
+        best_score = -MATE_SCORE - 1
+        for move in legal:
+            board.push(move)
+            try:
+                score, _ = self._negamax(
+                    board, max_depth - 1, -MATE_SCORE - 1, MATE_SCORE + 1, 1
+                )
+                score = -score
+            finally:
+                board.pop()
+            per_move.append((move, score))
+            if score > best_score:
+                best_score = score
+                best_move = move
+        return per_move, best_move, best_score
+
     def _eval_leaf(self, board: chess.Board) -> int:
         v = self._eval_fn(board)
         return v if board.turn == chess.WHITE else -v

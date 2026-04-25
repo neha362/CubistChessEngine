@@ -3,3 +3,8 @@ __pycache__/
 scenario_outputs/
 scenario_outputs_quick/
 pytest.ini
+
+# Keep local Stockfish binary out of git
+evolutionary_tournament/stockfish/*.exe
+# Ignore compiled Python artifacts
+*.pyc
