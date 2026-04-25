@@ -50,6 +50,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+root = str(REPO_ROOT)
+if root not in sys.path:
+    sys.path.insert(0, root)
 for sub in ("berserker1", "monte_carlo", "scenarios", "classical_minimax"):
     p = str(REPO_ROOT / sub)
     if p not in sys.path:
@@ -62,10 +65,26 @@ from movegen_agent import (  # noqa: E402
     GameState, from_fen, STARTPOS, all_legal_moves, make_move, is_terminal,
     game_result, sq_name,
 )
-from engine_wiring import gather_proposals, ENGINE_REGISTRY, _tuple_to_uci  # noqa: E402
+from adapters.engine_wrappers import gather_proposals, ENGINE_REGISTRY, tuple_to_uci  # noqa: E402
 
 
 TRUST_PATH = str(REPO_ROOT / "scenarios" / "cubist_trust.json")
+
+
+def _configure_stdout() -> None:
+    """
+    Prefer UTF-8 console output when the current stream supports reconfigure().
+
+    The ensemble CLI uses box-drawing characters in its diagnostics, which can
+    fail on the default Windows code page.
+    """
+    stream = getattr(sys, "stdout", None)
+    if stream is None or not hasattr(stream, "reconfigure"):
+        return
+    try:
+        stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,7 +119,7 @@ class CubistEngine:
             legal = all_legal_moves(state)
             if not legal:
                 return None, None
-            return _tuple_to_uci(legal[0]), None
+            return tuple_to_uci(legal[0]), None
 
         result = self.ensemble.evaluate(state, proposals)
         return result.best_move, result
@@ -347,7 +366,7 @@ def _state_to_fen(state: GameState) -> str:
 
 def _move_uci(move: tuple) -> str:
     frm, to, promo = move
-    return _tuple_to_uci((frm, to, promo))
+    return tuple_to_uci((frm, to, promo))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -355,6 +374,7 @@ def _move_uci(move: tuple) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    _configure_stdout()
     parser = argparse.ArgumentParser(
         description="Cubist ensemble chess engine (Layer 3 architecture)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -392,3 +412,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
