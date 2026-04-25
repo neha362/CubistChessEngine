@@ -770,19 +770,19 @@
           <div class="config-grid">
             <div>
               <div class="field-label" data-tip="Max half-moves per game">Max Moves</div>
-              <input class="field-input" id="maxMoves" type="number" value="120" min="20" max="500">
+              <input class="field-input" id="maxMoves" type="number" value="40" min="8" max="500">
             </div>
             <div>
               <div class="field-label" data-tip="Seconds each engine gets per move">Time / Move (s)</div>
-              <input class="field-input" id="timeLimit" type="number" value="5" min="1" max="60" step="0.5">
+              <input class="field-input" id="timeLimit" type="number" value="1" min="0.1" max="60" step="0.1">
             </div>
             <div>
               <div class="field-label" data-tip="Depth for tree-search engines">Search Depth</div>
-              <input class="field-input" id="searchDepth" type="number" value="3" min="1" max="8">
+              <input class="field-input" id="searchDepth" type="number" value="2" min="1" max="8">
             </div>
             <div>
               <div class="field-label" data-tip="Iterations for MCTS engine">MCTS Iters</div>
-              <input class="field-input" id="mctsIter" type="number" value="400" min="50" max="5000" step="50">
+              <input class="field-input" id="mctsIter" type="number" value="100" min="20" max="5000" step="20">
             </div>
           </div>
 
@@ -1006,7 +1006,15 @@ let scores     = {};
 let startTime  = null;
 let gameCount  = 0;
 let trustState = null;
-const API_BASE = 'http://127.0.0.1:8765';
+let trustPollHandle = null;
+function detectApiBase() {
+  const defaultPort = '8765';
+  if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+    return `${window.location.protocol}//${window.location.hostname}:${defaultPort}`;
+  }
+  return `http://127.0.0.1:${defaultPort}`;
+}
+const API_BASE = detectApiBase();
 
 const FILES = 'abcdefgh';
 const PIECE_UNICODE = {
@@ -1385,7 +1393,12 @@ async function fetchTrustMatrix(silent = false) {
     if (!resp.ok || !data.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
     trustState = data.trust;
     renderTrustMatrix();
-    if (!silent) log('Trust matrix refreshed', 'log-info');
+    updateTrustPolling();
+    const status = trustState?.status || {};
+    if (!silent) {
+      if (status.running || status.queued) log('Trust training still running in background', 'log-info');
+      else log('Trust matrix refreshed', 'log-info');
+    }
   } catch (e) {
     if (!silent) log(`Trust fetch failed: ${e.message || e}`, 'log-error');
   }
@@ -1408,6 +1421,13 @@ function applyTrustTraining(summary) {
   if (!summary) return;
   trustState = summary.trust || trustState;
   renderTrustMatrix();
+  updateTrustPolling();
+  const status = summary.status || trustState?.status || {};
+  if (summary.started || summary.queued || status.running || status.queued) {
+    const current = status.current_game || {};
+    log(`  trust queued: depth ${current.reference_depth ?? '?'} over up to ${current.max_plies ?? '?'} plies`, 'log-info');
+    return;
+  }
   const engines = Object.entries(summary.per_engine_avg || {})
     .map(([name, avg]) => `${name}=${avg.toFixed(3)}`)
     .join(' | ');
@@ -1417,10 +1437,26 @@ function applyTrustTraining(summary) {
   }
 }
 
+function updateTrustPolling() {
+  const busy = !!(trustState?.status?.running || trustState?.status?.queued);
+  if (busy && !trustPollHandle) {
+    trustPollHandle = setInterval(() => fetchTrustMatrix(true), 2000);
+    return;
+  }
+  if (!busy && trustPollHandle) {
+    clearInterval(trustPollHandle);
+    trustPollHandle = null;
+  }
+}
+
 function renderTrustMatrix() {
   const wrap = document.getElementById('trustMatrixWrap');
+  const status = trustState?.status || {};
+  const statusLine = status.running || status.queued
+    ? `<div class="code-snippet" style="margin-bottom:0.8rem;">Trust training is running in the background. The matrix auto-refreshes when the pass finishes.</div>`
+    : '';
   if (!trustState || !trustState.engines || !trustState.engines.length) {
-    wrap.innerHTML = '<div class="empty"><div class="big">♙</div>No trust data yet</div>';
+    wrap.innerHTML = `${statusLine}<div class="empty"><div class="big">♙</div>No trust data yet</div>`;
     return;
   }
   const scenarios = trustState.scenario_names || [];
@@ -1435,6 +1471,7 @@ function renderTrustMatrix() {
     return `<tr><td title="${engineId}">${engineId}</td>${cells}</tr>`;
   }).join('');
   wrap.innerHTML = `
+    ${statusLine}
     <table class="match-log">
       <thead><tr><th>Engine</th>${header}</tr></thead>
       <tbody>${rows}</tbody>
@@ -1476,16 +1513,19 @@ const MOVE_SEQUENCE = [
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function playRealGame(white, black, maxMoves, startFen) {
+  const depth = parseInt(document.getElementById('searchDepth').value);
   const payload = {
     mode,
     white,
     black,
     settings: {
-      depth: parseInt(document.getElementById('searchDepth').value),
+      depth,
       timeLimit: parseFloat(document.getElementById('timeLimit').value),
       mctsIter: parseInt(document.getElementById('mctsIter').value),
       maxMoves,
       fen: startFen || '',
+      trustReferenceDepth: Math.min(Math.max(depth, 2), 3),
+      trustMaxPlies: Math.min(maxMoves, 24),
     },
   };
 
@@ -1528,6 +1568,7 @@ async function playRealGame(white, black, maxMoves, startFen) {
     winner: g.winner,
     reason: g.reason || 'unknown',
     moves: g.moves || moves.length || 0,
+    trust: data.trust || null,
     trust_training: g && data.trust_training ? data.trust_training : null,
   };
 }

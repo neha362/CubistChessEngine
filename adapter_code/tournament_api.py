@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,10 +24,20 @@ if SCENARIOS_ROOT.exists():
         sys.path.insert(0, scenarios_str)
 
 from engine_adapter import GameRunner, build_combo, build_engine
-from tournament_trust_bridge import DEFAULT_TRUST_PATH, TournamentTrustBridge
+from tournament_trust_bridge import DEFAULT_TRUST_PATH, FAST_REFERENCE_DEPTH, TournamentTrustBridge
 
 
 TRUST_BRIDGE = TournamentTrustBridge(persistence_path=DEFAULT_TRUST_PATH)
+TRUST_LOCK = threading.Lock()
+TRUST_STATUS: Dict[str, Any] = {
+    "running": False,
+    "queued": False,
+    "last_started_at": None,
+    "last_finished_at": None,
+    "last_error": None,
+    "last_summary": None,
+    "current_game": None,
+}
 
 
 def _engine_kwargs(engine_id: str, depth: int, time_limit: float, mcts_iter: int) -> Dict[str, Any]:
@@ -66,6 +78,87 @@ def _build_adapter(entry: Dict[str, Any], mode: str, depth: int, time_limit: flo
     raise ValueError(f"Unsupported mode: {mode!r}")
 
 
+def _trust_payload() -> Dict[str, Any]:
+    with TRUST_LOCK:
+        snapshot = TRUST_BRIDGE.snapshot()
+        snapshot["status"] = dict(TRUST_STATUS)
+        return snapshot
+
+
+def _start_trust_training(
+    *,
+    start_fen: str,
+    uci_moves: list[str],
+    white_engine_id: str,
+    black_engine_id: str,
+    reference_depth: int,
+    max_plies: int,
+) -> Dict[str, Any]:
+    with TRUST_LOCK:
+        if TRUST_STATUS["running"] or TRUST_STATUS["queued"]:
+            return {
+                "queued": False,
+                "started": False,
+                "reason": "busy",
+                "status": dict(TRUST_STATUS),
+            }
+        TRUST_STATUS.update(
+            {
+                "running": False,
+                "queued": True,
+                "last_started_at": None,
+                "last_finished_at": None,
+                "last_error": None,
+                "last_summary": None,
+                "current_game": {
+                    "white": white_engine_id,
+                    "black": black_engine_id,
+                    "moves": len(uci_moves),
+                    "reference_depth": reference_depth,
+                    "max_plies": max_plies,
+                },
+            }
+        )
+
+    def _worker() -> None:
+        with TRUST_LOCK:
+            TRUST_STATUS["queued"] = False
+            TRUST_STATUS["running"] = True
+            TRUST_STATUS["last_started_at"] = time.time()
+        try:
+            summary = TRUST_BRIDGE.train_from_game(
+                start_fen=start_fen,
+                uci_moves=uci_moves,
+                white_engine_id=white_engine_id,
+                black_engine_id=black_engine_id,
+                reference_depth=reference_depth,
+                autosave=True,
+                max_plies=max_plies,
+            )
+            with TRUST_LOCK:
+                TRUST_STATUS["last_summary"] = summary
+        except Exception as exc:  # noqa: BLE001
+            with TRUST_LOCK:
+                TRUST_STATUS["last_error"] = {
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(limit=8),
+                }
+        finally:
+            with TRUST_LOCK:
+                TRUST_STATUS["running"] = False
+                TRUST_STATUS["queued"] = False
+                TRUST_STATUS["last_finished_at"] = time.time()
+
+    thread = threading.Thread(target=_worker, name="trust-training", daemon=True)
+    thread.start()
+    return {
+        "queued": True,
+        "started": True,
+        "reason": "background",
+        "status": dict(TRUST_STATUS),
+    }
+
+
 class TournamentApiHandler(BaseHTTPRequestHandler):
     server_version = "TournamentAPI/1.0"
 
@@ -103,7 +196,7 @@ class TournamentApiHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "ok": True,
-                    "trust": TRUST_BRIDGE.snapshot(),
+                    "trust": _trust_payload(),
                 },
             )
             return
@@ -113,12 +206,27 @@ class TournamentApiHandler(BaseHTTPRequestHandler):
         route = self.path.rstrip("/")
         if route == "/trust/reset":
             try:
-                TRUST_BRIDGE.reset()
+                with TRUST_LOCK:
+                    if TRUST_STATUS["running"] or TRUST_STATUS["queued"]:
+                        self._send_json(409, {"ok": False, "error": "Trust training is running; try again in a moment."})
+                        return
+                    TRUST_BRIDGE.reset()
+                    TRUST_STATUS.update(
+                        {
+                            "running": False,
+                            "queued": False,
+                            "last_started_at": None,
+                            "last_finished_at": None,
+                            "last_error": None,
+                            "last_summary": None,
+                            "current_game": None,
+                        }
+                    )
                 self._send_json(
                     200,
                     {
                         "ok": True,
-                        "trust": TRUST_BRIDGE.snapshot(),
+                        "trust": _trust_payload(),
                     },
                 )
             except Exception as exc:  # noqa: BLE001
@@ -140,10 +248,12 @@ class TournamentApiHandler(BaseHTTPRequestHandler):
             if not isinstance(white_entry, dict) or not isinstance(black_entry, dict):
                 raise ValueError("white and black entrants must be objects")
 
-            depth = int(settings.get("depth", 4))
-            time_limit = float(settings.get("timeLimit", 5.0))
-            mcts_iter = int(settings.get("mctsIter", 400))
-            max_moves = int(settings.get("maxMoves", 120))
+            depth = int(settings.get("depth", 2))
+            time_limit = float(settings.get("timeLimit", 1.0))
+            mcts_iter = int(settings.get("mctsIter", 100))
+            max_moves = int(settings.get("maxMoves", 40))
+            trust_reference_depth = int(settings.get("trustReferenceDepth", min(max(depth, FAST_REFERENCE_DEPTH), 3)))
+            trust_max_plies = int(settings.get("trustMaxPlies", min(max_moves, 24)))
             fen = str(settings.get("fen") or "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
 
             white_adapter = _build_adapter(white_entry, mode, depth, time_limit, mcts_iter)
@@ -151,12 +261,13 @@ class TournamentApiHandler(BaseHTTPRequestHandler):
 
             runner = GameRunner()
             game = runner.play(white_adapter, black_adapter, fen=fen, max_moves=max_moves, verbose=False)
-            trust_training = TRUST_BRIDGE.train_from_game(
+            trust_training = _start_trust_training(
                 start_fen=fen,
                 uci_moves=list(game.moves),
                 white_engine_id=white_entry.get("name", white_adapter.name),
                 black_engine_id=black_entry.get("name", black_adapter.name),
-                autosave=True,
+                reference_depth=trust_reference_depth,
+                max_plies=trust_max_plies,
             )
 
             self._send_json(
@@ -173,6 +284,7 @@ class TournamentApiHandler(BaseHTTPRequestHandler):
                         "final_fen": game.final_fen,
                     },
                     "trust_training": trust_training,
+                    "trust": _trust_payload(),
                 },
             )
         except Exception as exc:  # noqa: BLE001

@@ -40,6 +40,7 @@ from chaos_move_gen import from_fen as chaos_from_fen
 
 DEFAULT_TRUST_PATH = str(REPO_ROOT / "scenarios" / "cubist_trust.json")
 _GEN = MoveGenerator()
+FAST_REFERENCE_DEPTH = 2
 
 
 class TournamentTrustBridge:
@@ -74,6 +75,7 @@ class TournamentTrustBridge:
         black_engine_id: str,
         reference_depth: Optional[int] = None,
         autosave: bool = True,
+        max_plies: Optional[int] = None,
     ) -> dict[str, Any]:
         """
         Replay a finished game and update trust for the engines that played it.
@@ -85,7 +87,9 @@ class TournamentTrustBridge:
         sums: dict[str, float] = {}
         counts: dict[str, int] = {}
 
-        for ply, uci in enumerate(uci_moves):
+        capped_moves = uci_moves if max_plies is None else uci_moves[:max_plies]
+
+        for ply, uci in enumerate(capped_moves):
             fen_before = state.fen()
             engine_id = white_engine_id if state.turn == "w" else black_engine_id
             legal = _GEN.legal_moves(state)
@@ -119,6 +123,7 @@ class TournamentTrustBridge:
             "updated": bool(per_move),
             "moves_trained": len(per_move),
             "reference_depth": reference_depth or REFERENCE_DEPTH,
+            "max_plies": max_plies,
             "per_engine_avg": averages,
             "per_move": per_move,
             "trust": self.snapshot(),
