@@ -1,0 +1,55 @@
+{
+    "rounds":  1,
+    "games_per_match":  1,
+    "max_plies":  60,
+    "output_dir":  "scenario_outputs_quick",
+    "baseline_model":  "classical_minimax",
+    "move_time_ms":  700,
+    "tactics_file":  "scenario/tactics_default.json",
+    "opening_fens":  [
+                         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                         "rnbqkbnr/pppp1ppp/8/4p3/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2"
+                     ],
+    "models":  [
+                   {
+                       "name":  "classical_minimax",
+                       "engine_type":  "classical_minimax",
+                       "source_dir":  "classical_minimax",
+                       "improve_command":  null,
+                       "test_command":  "python -m pytest -q",
+                       "move_time_ms":  250
+                   },
+                   {
+                       "name":  "claude_api",
+                       "engine_type":  "claude_api",
+                       "source_dir":  "claude_api",
+                       "improve_command":  null,
+                       "test_command":  null,
+                       "move_time_ms":  250
+                   },
+                   {
+                       "name":  "monte_carlo",
+                       "engine_type":  "mcts",
+                       "source_dir":  "monte_carlo",
+                       "improve_command":  null,
+                       "test_command":  "python movegen_agent.py --test \u0026\u0026 python mcts_agent.py --test",
+                       "move_time_ms":  250
+                   },
+                   {
+                       "name":  "mock_nn",
+                       "engine_type":  "mock_nn",
+                       "source_dir":  "mock_nn",
+                       "improve_command":  null,
+                       "test_command":  "node agent1_movegen.js \u0026\u0026 node agent2_search.js \u0026\u0026 node agent3_eval.js",
+                       "move_time_ms":  250
+                   },
+                   {
+                       "name":  "berserker1",
+                       "engine_type":  "aggressive_berserker",
+                       "source_dir":  "berserker1",
+                       "improve_command":  null,
+                       "test_command":  "python movegen_agent.py --test \u0026\u0026 python berserker_search_agent.py --test",
+                       "move_time_ms":  250
+                   }
+               ]
+}
