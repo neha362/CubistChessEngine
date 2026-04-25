@@ -1,0 +1,12 @@
+# TDLeaf vs Sunfish Benchmark Summary
+
+## Baseline
+- Games: 100
+- W/D/L: 0/24/76
+- Score rate: 0.120
+- Win rate: 0.000
+- Elo estimate: -346.1
+- Weights: `C:\Users\kliu3\Downloads\cubist\tdleaf_nnue_engine\checkpoints\nnue_runtime_distilled_improved_5m.npz`
+
+## Commands Used
+- `python -m tdleaf_nnue_engine.benchmarks.run_tdleaf_vs_sunfish --games 100 --seed 1234 --opening-plies 4 --tdleaf-depth 2 --sunfish-movetime-ms 35`

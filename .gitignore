@@ -8,3 +8,7 @@ pytest.ini
 evolutionary_tournament/stockfish/*.exe
 # Ignore compiled Python artifacts
 *.pyc
+
+# Ignore local TD-Leaf training retry outputs (machine-specific/ephemeral)
+tdleaf_nnue_engine/artifacts/training_retry_summary.txt
+tdleaf_nnue_engine/artifacts/training_retry_summary.json

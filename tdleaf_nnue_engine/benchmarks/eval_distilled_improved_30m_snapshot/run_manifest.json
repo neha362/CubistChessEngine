@@ -1,0 +1,23 @@
+{
+  "baseline_stats": {
+    "games": 100,
+    "wins": 0,
+    "draws": 26,
+    "losses": 74,
+    "score": 13.0,
+    "score_rate": 0.13,
+    "win_rate": 0.0,
+    "elo_estimate": -330.2303601247127
+  },
+  "adapted_stats": null,
+  "artifacts": {
+    "baseline_csv": "tdleaf_nnue_engine\\benchmarks\\eval_distilled_improved_30m_snapshot\\baseline_games.csv",
+    "baseline_json": "tdleaf_nnue_engine\\benchmarks\\eval_distilled_improved_30m_snapshot\\baseline_summary.json",
+    "summary_md": "tdleaf_nnue_engine\\benchmarks\\eval_distilled_improved_30m_snapshot\\benchmark_summary.md",
+    "adapted_csv": null,
+    "adapted_json": null,
+    "sunfish_repo_dir": "C:\\Users\\kliu3\\Downloads\\cubist\\external\\sunfish",
+    "sunfish_uci_entry": "C:\\Users\\kliu3\\Downloads\\cubist\\external\\sunfish\\sunfish.py",
+    "adapted_weights": null
+  }
+}
