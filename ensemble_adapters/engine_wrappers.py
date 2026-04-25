@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-for sub in ("adapter_code", "berserker1", "monte_carlo", "classical_minimax", "berserker_2", "scenarios"):
+for sub in ("adapter_code", "scenarios"):
     path = str(REPO_ROOT / sub)
     if path not in sys.path:
         sys.path.insert(0, path)
@@ -48,7 +48,7 @@ except Exception:  # pragma: no cover - depends on local environment
     chess = None
 
 from layer3_ensemble import EngineProposal
-from movegen_agent import all_legal_moves, from_fen, make_move, sq_name
+from chaos_move_gen import all_legal_moves, from_fen, make_move, sq_name
 
 
 FILES = "abcdefgh"
@@ -144,7 +144,7 @@ _siege_components = None
 def _fen_eval_classical(fen: str) -> float:
     if chess is None:
         raise RuntimeError("python-chess unavailable")
-    from chess_engine.eval import EvalAgent
+    from classical_eval import EvalAgent
 
     evaluator = EvalAgent()
     return float(evaluator.evaluate(chess.Board(fen)))
@@ -159,7 +159,7 @@ def _fen_eval_chaos(fen: str) -> float:
 def _fen_eval_siege(fen: str) -> float:
     if chess is None:
         raise RuntimeError("python-chess unavailable")
-    from eval import Evaluator as SiegeEvaluator
+    from siege_eval import Evaluator as SiegeEvaluator
 
     evaluator = SiegeEvaluator()
     return float(evaluator.evaluate(chess.Board(fen)))
@@ -255,15 +255,12 @@ def _guidance_eval(search_id: str, eval_id: str) -> str:
 def _get_classical_search(eval_id: str):
     if eval_id in _classical_components:
         return _classical_components[eval_id]
-    if chess is None:
-        raise RuntimeError("python-chess unavailable")
-    from chess_engine.move_gen import MoveGenAgent
-    from chess_engine.search import SearchAgent
+    from classical_search import SearchAgent
 
-    def eval_fn(board) -> int:
-        return int(round(_eval_from_fen(board.fen(), eval_id)))
+    def eval_fn(state) -> int:
+        return int(round(_eval_from_fen(state.fen(), eval_id)))
 
-    search = SearchAgent(eval_fn=eval_fn, move_gen=MoveGenAgent())
+    search = SearchAgent(eval_fn=eval_fn, max_depth=3, time_limit=1.0)
     _classical_components[eval_id] = search
     return search
 
@@ -274,26 +271,25 @@ def _get_siege_components():
         return _siege_components
     if chess is None:
         raise RuntimeError("python-chess unavailable")
-    from move_gen import MoveGen as SiegeMoveGen
-    from search import Search as SiegeSearch
+    from siege_move_gen import MoveGen as SiegeMoveGen
+    from siege_search import Search as SiegeSearch
 
     _siege_components = (SiegeMoveGen(), SiegeSearch(extend_checks_in_qsearch=True))
     return _siege_components
 
 
 def _search_classical(fen: str, eval_id: str, max_depth: int = 3):
-    if chess is None:
-        return None
-    board = chess.Board(fen)
-    if not list(board.legal_moves):
-        return None
+    from move_gen_agent import parse_fen
+
+    state = parse_fen(fen)
     search = _get_classical_search(_guidance_eval("classical", eval_id))
-    move = search.best_move(board, max_depth)
-    return None if move is None else chess_move_to_tuple(move)
+    search.max_depth = max_depth
+    move, _score, _pv = search.search(state)
+    return None if move is None else uci_to_tuple(move.uci())
 
 
 def _search_chaos(fen: str, eval_id: str, max_depth: int = 3, movetime_ms: int = 800):
-    import berserker_search_agent as search_module
+    import chaos_search as search_module
 
     state = from_fen(fen)
     if not all_legal_moves(state):
@@ -341,26 +337,24 @@ def _search_mcts(
     rollout_samples: int = 5,
     rollout_plies: int = 8,
 ):
-    import mcts_agent as search_module
-    import rollout_agent as rollout_module
+    import mcts_search as search_module
+    import mcts_move_gen as mcts_movegen
 
     state = search_module.from_fen(fen)
     if not all_legal_moves(state):
         return None
-
-    original_rollout = search_module.rollout
 
     def eval_rollout(state_inner):
         samples = []
         for _ in range(max(1, rollout_samples)):
             current = state_inner
             for _ply in range(max(1, rollout_plies)):
-                if rollout_module.is_terminal(current):
-                    samples.append(rollout_module.game_result(current))
+                if search_module.is_terminal(current):
+                    samples.append(search_module.game_result(current))
                     break
-                move = rollout_module.ACTIVE_POLICY(current)
+                move = mcts_movegen.fast_random_move(current)
                 if move is None:
-                    samples.append(rollout_module.game_result(current))
+                    samples.append(search_module.game_result(current))
                     break
                 current = search_module.make_move(current, move)
             else:
@@ -368,12 +362,13 @@ def _search_mcts(
                 samples.append(_score_prob(raw, scale=400.0))
         return sum(samples) / len(samples)
 
-    search_module.rollout = eval_rollout
-    try:
-        result = search_module.mcts_search(state, max_iter=max_iter, movetime_ms=movetime_ms, verbose=False)
-    finally:
-        search_module.rollout = original_rollout
-
+    result = search_module.mcts_search(
+        state,
+        max_iter=max_iter,
+        movetime_ms=movetime_ms,
+        verbose=False,
+        leaf_value_fn=eval_rollout,
+    )
     return result.best_move
 
 

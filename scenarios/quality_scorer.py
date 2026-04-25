@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-for sub in ("classical_minimax",):
+for sub in ("adapter_code",):
     p = str(REPO_ROOT / sub)
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -63,13 +63,12 @@ def _get_reference():
     """Build the reference engine once and cache it."""
     global _reference
     if _reference is None:
-        from chess_engine.move_gen import MoveGenAgent
-        from chess_engine.eval     import EvalAgent
-        from chess_engine.search   import SearchAgent
+        from classical_move_gen import MoveGenAgent
+        from classical_eval import EvalAgent
+        from classical_search import SearchAgent
         ev = EvalAgent()
-        mg = MoveGenAgent()
-        sa = SearchAgent(eval_fn=ev.evaluate, move_gen=mg)
-        _reference = (sa, ev, mg)
+        sa = SearchAgent(eval_fn=ev.evaluate, max_depth=REFERENCE_DEPTH, time_limit=2.0)
+        _reference = (sa, ev)
     return _reference
 
 
@@ -84,7 +83,7 @@ def score_move_quality(fen_before: str, played_uci: str,
     Cheap optimization: if the engine's move IS the reference's best move,
     return 1.0 immediately without re-evaluating anything.
     """
-    sa, ev, mg = _get_reference()
+    sa, ev = _get_reference()
     depth = reference_depth or REFERENCE_DEPTH
 
     board = chess.Board(fen_before)
@@ -99,7 +98,10 @@ def score_move_quality(fen_before: str, played_uci: str,
 
     # Get the reference engine's best move.
     try:
-        ref_best = sa.best_move(board, depth)
+        sa.max_depth = depth
+        from move_gen_agent import parse_fen
+        ref_best_move, _ref_score, _pv = sa.search(parse_fen(fen_before))
+        ref_best = None if ref_best_move is None else chess.Move.from_uci(ref_best_move.uci())
     except Exception:
         return 0.5  # reference crashed; no useful signal
     if ref_best is None:

@@ -52,12 +52,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for rel in ("berserker1", "monte_carlo"):
+for rel in ("adapter_code",):
     path = os.path.join(REPO_ROOT, rel)
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from movegen_agent import GameState, STARTPOS, all_legal_moves, from_fen, is_in_check, make_move, sq_name
+from chaos_move_gen import GameState, STARTPOS, all_legal_moves, from_fen, is_in_check, make_move, sq_name
 
 
 SCENARIO_NAMES = (
