@@ -827,7 +827,7 @@
         </div>
         <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
         <div class="console" id="console">
-          <span class="log-prompt">$ </span><span class="log-info">Tournament runner ready. Select engines or build combos, then press Run.</span><br>
+          <span class="log-prompt">$ </span><span class="log-info">Tournament runner ready. Start python tournament_api.py in adapter_code, then press Run.</span><br>
           <span class="cursor-blink"></span>
         </div>
       </div>
@@ -981,6 +981,7 @@ let games      = [];
 let scores     = {};
 let startTime  = null;
 let gameCount  = 0;
+const API_BASE = 'http://127.0.0.1:8765';
 
 const FILES = 'abcdefgh';
 const PIECE_UNICODE = {
@@ -1386,46 +1387,60 @@ const MOVE_SEQUENCE = [
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-async function simulateGame(white, black, maxMoves, startFen) {
-  const OUTCOMES = ['checkmate','checkmate','checkmate','stalemate','50-move','repetition'];
-  const totalPlies = Math.floor(Math.random() * Math.min(maxMoves, MOVE_SEQUENCE.length)) + 8;
-  const movesPlayed = [];
+async function playRealGame(white, black, maxMoves, startFen) {
+  const payload = {
+    mode,
+    white,
+    black,
+    settings: {
+      depth: parseInt(document.getElementById('searchDepth').value),
+      timeLimit: parseFloat(document.getElementById('timeLimit').value),
+      mctsIter: parseInt(document.getElementById('mctsIter').value),
+      maxMoves,
+      fen: startFen || '',
+    },
+  };
 
-  // ── BOARD FIX: maintain a real mutable board state ──
-  let board    = startFen ? fenToBoard(startFen) : standardBoard();
+  const resp = await fetch(`${API_BASE}/play`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    const err = data?.error || `HTTP ${resp.status}`;
+    throw new Error(err);
+  }
+
+  const g = data.game;
+  const moves = Array.isArray(g.uci_moves) ? g.uci_moves : [];
+  let board = startFen ? fenToBoard(startFen) : standardBoard();
   let lastFrom = -1, lastTo = -1;
 
-  for (let i = 0; i < totalPlies; i++) {
-    if (stopFlag) return null;
-
-    const uci    = MOVE_SEQUENCE[i % MOVE_SEQUENCE.length];
+  for (let i = 0; i < moves.length; i++) {
+    const uci = moves[i];
+    if (!uci || uci.length < 4) continue;
     const fromSq = FILES.indexOf(uci[0]) + (8 - parseInt(uci[1])) * 8;
     const toSq   = FILES.indexOf(uci[2]) + (8 - parseInt(uci[3])) * 8;
-
-    // Apply move to board — pieces now actually move
-    board    = applyUCI(board, uci);
+    board = applyUCI(board, uci);
     lastFrom = fromSq;
-    lastTo   = toSq;
-    movesPlayed.push(uci);
-
-    const side  = i % 2 === 0 ? white : black;
-    const delay = Math.random() * 100 + 25;
-
-    // Render the updated board position
-    renderBoard(board, lastFrom, lastTo);
+    lastTo = toSq;
     log(`  ${i%2===0?'W':'B'}${Math.floor(i/2)+1}: ${uci}`, 'log-move');
-    document.getElementById('statMoves').textContent = movesPlayed.length;
-
-    await sleep(delay);
   }
 
-  const reason = OUTCOMES[Math.floor(Math.random() * OUTCOMES.length)];
-  let winner = null;
-  if (reason === 'checkmate') {
-    winner = totalPlies % 2 === 0 ? 'black' : 'white';
+  if (g.final_fen) {
+    try { board = fenToBoard(g.final_fen); } catch {}
   }
+  renderBoard(board, lastFrom, lastTo);
+  document.getElementById('statMoves').textContent = g.moves || moves.length || 0;
 
-  return { white: white.name, black: black.name, winner, reason, moves: movesPlayed.length };
+  return {
+    white: g.white || white.name,
+    black: g.black || black.name,
+    winner: g.winner,
+    reason: g.reason || 'unknown',
+    moves: g.moves || moves.length || 0,
+  };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1462,6 +1477,7 @@ async function startTournament() {
   const total = pairs.length;
   const modeLabel = mode === 'combo' ? 'Mix & Match combos' : 'engines';
   log(`Tournament: ${entrants.length} ${modeLabel}, ${total} games`, 'log-header');
+  log(`Backend: ${API_BASE}`, 'log-info');
   log(`Settings: depth=${document.getElementById('searchDepth').value}, time=${document.getElementById('timeLimit').value}s, maxMoves=${maxMoves}`);
   if (mode === 'combo') log(`Combos: ${combos.map(c => c.name).join(' | ')}`, 'log-info');
   log('');
@@ -1474,7 +1490,14 @@ async function startTournament() {
 
     log(`[${gi+1}/${total}] ${w.name} (W) vs ${b.name} (B)`, 'log-header');
 
-    const result = await simulateGame(w, b, maxMoves, fen);
+    let result = null;
+    try {
+      result = await playRealGame(w, b, maxMoves, fen);
+    } catch (e) {
+      log(`  -> Backend error: ${e.message || e}`, 'log-error');
+      stopFlag = true;
+      break;
+    }
     if (!result) break;
 
     games.push(result);
@@ -1497,7 +1520,7 @@ async function startTournament() {
     document.getElementById('statTime').textContent = ((Date.now()-startTime)/1000).toFixed(1) + 's';
     renderLeaderboard(entrants);
     renderGamesTable();
-    await sleep(40);
+    await sleep(20);
   }
 
   document.getElementById('progressBar').style.width = '100%';
@@ -1541,7 +1564,14 @@ async function startHeadToHead() {
   updateButtons();
 
   log(`1v1: ${w.name} (W) vs ${b.name} (B)`, 'log-header');
-  const result = await simulateGame(w, b, maxMoves, fen);
+  log(`Backend: ${API_BASE}`, 'log-info');
+  let result = null;
+  try {
+    result = await playRealGame(w, b, maxMoves, fen);
+  } catch (e) {
+    log(`-> Backend error: ${e.message || e}`, 'log-error');
+    result = null;
+  }
 
   if (result) {
     games.push(result); gameCount = 1;
