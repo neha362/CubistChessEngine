@@ -141,8 +141,9 @@ def score_game(history: list, reference_depth: Optional[int] = None,
     `history` is a list of (fen_before, uci_played, layer3_result) tuples.
 
     counterfactual=True (default): score *every* engine's bid at each ply
-        and emit one (engine, scenarios, quality) tuple per bid. This gives
-        the trust matrix one signal per engine per ply (~5x more samples)
+        and emit one (engine, scenarios, quality, score_cp) tuple per bid.
+        This gives the trust matrix one signal per engine per ply (~25x more
+        samples in the full 5x5 grid)
         and lets non-winning engines also accumulate scenario-conditioned
         evidence — including dissenting engines paying for bad moves the
         ensemble didn't actually play. Requires Layer3Result.proposals to
@@ -152,7 +153,7 @@ def score_game(history: list, reference_depth: Optional[int] = None,
         Falls back to this automatically when an l3_result has no proposals.
 
     Returns:
-      - per_move_qualities: list[(engine_id, scenario_profile, quality)]
+      - per_move_qualities: list[(engine_id, scenario_profile, quality, score_cp)]
       - per_engine_avg:    dict[engine_id, avg_quality]
     """
     per_move = []
@@ -167,13 +168,18 @@ def score_game(history: list, reference_depth: Optional[int] = None,
         # Choose which (engine_id, uci) pairs to score for this ply.
         proposals = getattr(l3_result, "proposals", None) or []
         if counterfactual and proposals:
-            scored = [(p.engine_id, p.uci) for p in proposals]
+            scored = [(p.engine_id, p.uci, p.score_cp) for p in proposals]
         else:
-            scored = [(l3_result.chosen_engine, uci_played)]
+            score_cp = None
+            for proposal in proposals:
+                if proposal.engine_id == l3_result.chosen_engine:
+                    score_cp = proposal.score_cp
+                    break
+            scored = [(l3_result.chosen_engine, uci_played, score_cp)]
 
-        for engine_id, uci in scored:
+        for engine_id, uci, score_cp in scored:
             q = score_move_quality(fen_before, uci, reference_depth)
-            per_move.append((engine_id, scenarios, q))
+            per_move.append((engine_id, scenarios, q, score_cp))
             sums[engine_id]   = sums.get(engine_id, 0.0)   + q
             counts[engine_id] = counts.get(engine_id, 0) + 1
 

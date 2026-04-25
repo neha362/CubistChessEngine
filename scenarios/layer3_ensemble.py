@@ -98,6 +98,8 @@ class EngineProposal:
     score_cp: int
     confidence: float
     prior_weight: float = 1.0
+    search_id: str = ""
+    eval_id: str = ""
 
     @property
     def uci(self) -> str:
@@ -122,6 +124,49 @@ class AgreementProfile:
     majority: float
     split: float
     largest_group: int
+    consensus_ratio: float
+    majority_threshold: int
+
+
+@dataclass
+class PlattCalibrator:
+    slope: float = 1.0
+    bias: float = 0.0
+    samples: list[tuple[float, float]] = field(default_factory=list)
+    history_cap: int = 128
+
+    @staticmethod
+    def _sigmoid(x: float) -> float:
+        return 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, x))))
+
+    def predict(self, score_cp: int) -> float:
+        x = max(-6.0, min(6.0, score_cp / 400.0))
+        return self._sigmoid(self.slope * x + self.bias)
+
+    def update(self, score_cp: int, quality: float, epochs: int = 24, lr: float = 0.15) -> None:
+        x = max(-6.0, min(6.0, score_cp / 400.0))
+        y = max(0.0, min(1.0, quality))
+        self.samples.append((x, y))
+        if len(self.samples) > self.history_cap:
+            self.samples = self.samples[-self.history_cap:]
+
+        if len(self.samples) < 3:
+            return
+
+        batch = self.samples[-64:]
+        for _ in range(epochs):
+            grad_slope = 0.0
+            grad_bias = 0.0
+            for x_i, y_i in batch:
+                pred = self._sigmoid(self.slope * x_i + self.bias)
+                err = pred - y_i
+                grad_slope += err * x_i
+                grad_bias += err
+            n = float(len(batch))
+            self.slope -= lr * grad_slope / n
+            self.bias -= lr * grad_bias / n
+            self.slope = max(0.05, min(6.0, self.slope))
+            self.bias = max(-4.0, min(4.0, self.bias))
 
 
 @dataclass
@@ -149,6 +194,7 @@ class Layer3Result:
     move_weights: dict[str, float]
     engine_probs: dict[str, float]
     engine_trusts: dict[str, float]
+    engine_confidences: dict[str, float]
     scenario_profile: ScenarioProfile
     agreement_profile: AgreementProfile
     short_circuit: bool
@@ -350,11 +396,14 @@ def agreement_profile(proposals: list[EngineProposal]) -> AgreementProfile:
         counts[proposal.uci] = counts.get(proposal.uci, 0) + 1
     largest = max(counts.values()) if counts else 0
     n = len(proposals)
+    majority_threshold = max(1, math.ceil(n / 2.0))
     return AgreementProfile(
         all_agree=1.0 if n > 0 and largest == n else 0.0,
-        majority=1.0 if largest >= 3 else 0.0,
-        split=1.0 if n > 0 and largest <= 2 else 0.0,
+        majority=1.0 if largest >= majority_threshold else 0.0,
+        split=1.0 if n > 0 and largest < majority_threshold else 0.0,
         largest_group=largest,
+        consensus_ratio=(largest / n) if n else 0.0,
+        majority_threshold=majority_threshold,
     )
 
 
@@ -363,11 +412,12 @@ class Layer3Ensemble:
         self,
         engine_ids: list[str],
         persistence_path: Optional[str] = None,
-        consensus_threshold: int = 4,
+        consensus_threshold: Optional[int] = None,
     ):
         self.consensus_threshold = consensus_threshold
         self.persistence_path = persistence_path
         self.trust_matrix = ScenarioTrustMatrix(engine_ids=engine_ids)
+        self.calibrators = {engine_id: PlattCalibrator() for engine_id in engine_ids}
         self._load()
 
     def _load(self) -> None:
@@ -377,15 +427,39 @@ class Layer3Ensemble:
             with open(self.persistence_path) as f:
                 data = json.load(f)
             self.trust_matrix = ScenarioTrustMatrix.from_snapshot(data.get("scenario_matrix", {}))
+            cal_data = data.get("calibration", {})
+            for engine_id, payload in cal_data.items():
+                calibrator = self.calibrators.setdefault(engine_id, PlattCalibrator())
+                calibrator.slope = float(payload.get("slope", calibrator.slope))
+                calibrator.bias = float(payload.get("bias", calibrator.bias))
+                calibrator.samples = [
+                    (float(x), float(y))
+                    for x, y in payload.get("samples", [])[-calibrator.history_cap:]
+                ]
         except Exception:
             pass
 
     def _save(self) -> None:
         if not self.persistence_path:
             return
-        payload = {"scenario_matrix": self.trust_matrix.snapshot()}
+        payload = {
+            "scenario_matrix": self.trust_matrix.snapshot(),
+            "calibration": {
+                engine_id: {
+                    "slope": calibrator.slope,
+                    "bias": calibrator.bias,
+                    "samples": calibrator.samples[-64:],
+                }
+                for engine_id, calibrator in self.calibrators.items()
+            },
+        }
         with open(self.persistence_path, "w") as f:
             json.dump(payload, f, indent=2)
+
+    def _consensus_threshold(self, proposal_count: int) -> int:
+        if self.consensus_threshold is not None:
+            return self.consensus_threshold
+        return max(4, math.ceil(proposal_count * 0.6))
 
     def evaluate(self, state: GameState, proposals: list[EngineProposal]) -> Layer3Result:
         if not proposals:
@@ -397,9 +471,10 @@ class Layer3Ensemble:
         votes: dict[str, list[EngineProposal]] = {}
         for proposal in proposals:
             self.trust_matrix.ensure_engine(proposal.engine_id)
+            self.calibrators.setdefault(proposal.engine_id, PlattCalibrator())
             votes.setdefault(proposal.uci, []).append(proposal)
 
-        if agreement.largest_group >= self.consensus_threshold:
+        if agreement.largest_group >= self._consensus_threshold(len(proposals)):
             best_uci, group = max(votes.items(), key=lambda item: len(item[1]))
             chosen_engine = max(group, key=lambda p: p.confidence * p.prior_weight).engine_id
             prob = 1.0 / len(group)
@@ -409,6 +484,11 @@ class Layer3Ensemble:
                 move_weights={best_uci: 1.0},
                 engine_probs={proposal.engine_id: (prob if proposal in group else 0.0) for proposal in proposals},
                 engine_trusts={proposal.engine_id: self.trust_matrix.trust_for(proposal.engine_id, scenarios) for proposal in proposals},
+                engine_confidences={
+                    proposal.engine_id: 0.5 * proposal.confidence
+                    + 0.5 * self.calibrators[proposal.engine_id].predict(proposal.score_cp)
+                    for proposal in proposals
+                },
                 scenario_profile=scenarios,
                 agreement_profile=agreement,
                 short_circuit=True,
@@ -417,11 +497,15 @@ class Layer3Ensemble:
 
         logits = []
         trusts = {}
+        confidences = {}
         for proposal in proposals:
             trust = self.trust_matrix.trust_for(proposal.engine_id, scenarios)
             trusts[proposal.engine_id] = trust
-            score_signal = proposal.score_cp / 200.0
-            conf_signal = 2.0 * proposal.confidence - 1.0
+            calibrated = self.calibrators[proposal.engine_id].predict(proposal.score_cp)
+            combined_conf = 0.5 * proposal.confidence + 0.5 * calibrated
+            confidences[proposal.engine_id] = combined_conf
+            score_signal = 2.0 * calibrated - 1.0
+            conf_signal = 2.0 * combined_conf - 1.0
             prior_signal = math.log(max(1e-6, proposal.prior_weight))
             logits.append(1.4 * trust + 0.8 * conf_signal + 0.5 * score_signal + 0.35 * prior_signal)
 
@@ -444,19 +528,28 @@ class Layer3Ensemble:
             move_weights=move_weights,
             engine_probs=engine_probs,
             engine_trusts=trusts,
+            engine_confidences=confidences,
             scenario_profile=scenarios,
             agreement_profile=agreement,
             short_circuit=False,
             proposals=list(proposals),
         )
 
-    def update(self, engine_id: str, scenario_profile: ScenarioProfile, quality: float, autosave: bool = True) -> None:
+    def update(self, engine_id: str, scenario_profile: ScenarioProfile, quality: float,
+               score_cp: Optional[int] = None, autosave: bool = True) -> None:
         self.trust_matrix.update(engine_id, scenario_profile, quality)
+        if score_cp is not None:
+            self.calibrators.setdefault(engine_id, PlattCalibrator()).update(score_cp, quality)
         if autosave:
             self._save()
 
     def update_from_result(self, result: Layer3Result, quality: float, autosave: bool = True) -> None:
-        self.update(result.chosen_engine, result.scenario_profile, quality, autosave=autosave)
+        score_cp = None
+        for proposal in result.proposals:
+            if proposal.engine_id == result.chosen_engine:
+                score_cp = proposal.score_cp
+                break
+        self.update(result.chosen_engine, result.scenario_profile, quality, score_cp=score_cp, autosave=autosave)
 
     def trust_report(self) -> str:
         lines = ["┌── LAYER 3 TRUST MATRIX ───────────────────────────────────┐"]
@@ -468,6 +561,11 @@ class Layer3Ensemble:
                     f"│    {scenario:<20} mean={cell.mean:.3f}  "
                     f"(a={cell.alpha:.1f}, b={cell.beta:.1f}) │"
                 )
+            calibrator = self.calibrators.get(engine_id, PlattCalibrator())
+            lines.append(
+                f"│    calibration           slope={calibrator.slope:.3f} "
+                f"bias={calibrator.bias:.3f} │"
+            )
         lines.append("└────────────────────────────────────────────────────────────┘")
         return "\n".join(lines)
 
@@ -483,21 +581,21 @@ def _run_tests() -> bool:
     ok &= t1
     print(f"  [{'PASS' if t1 else 'FAIL'}] Scenario activations bounded")
 
-    ensemble = Layer3Ensemble(engine_ids=["Classical", "Auction", "MCTS", "Oracle", "Pattern"])
+    ensemble = Layer3Ensemble(engine_ids=["classical_classical", "chaos_chaos", "mcts_neural", "neural_siege", "siege_classical"])
 
     proposals = [
-        EngineProposal("Classical", (52, 36, ""), 40, 0.60, 1.0),  # e2e4
-        EngineProposal("Auction", (51, 35, ""), 25, 0.55, 1.0),    # d2d4
-        EngineProposal("MCTS", (52, 36, ""), 10, 0.52, 1.0),       # e2e4
-        EngineProposal("Oracle", (62, 45, ""), 55, 0.68, 1.0),     # g1f3
-        EngineProposal("Pattern", (52, 36, ""), 15, 0.57, 1.0),    # e2e4
+        EngineProposal("classical_classical", (52, 36, ""), 40, 0.60, 1.0, "classical", "classical"),  # e2e4
+        EngineProposal("chaos_chaos", (51, 35, ""), 25, 0.55, 1.0, "chaos", "chaos"),                  # d2d4
+        EngineProposal("mcts_neural", (52, 36, ""), 10, 0.52, 1.0, "mcts", "neural"),                  # e2e4
+        EngineProposal("neural_siege", (62, 45, ""), 55, 0.68, 1.0, "neural", "siege"),                # g1f3
+        EngineProposal("siege_classical", (52, 36, ""), 15, 0.57, 1.0, "siege", "classical"),          # e2e4
     ]
     result = ensemble.evaluate(state, proposals)
     t2 = result.best_move in {"e2e4", "g1f3", "d2d4"}
     ok &= t2
     print(f"  [{'PASS' if t2 else 'FAIL'}] Ensemble returns a legal-looking move ({result.best_move})")
 
-    before = ensemble.trust_matrix.cells["Oracle"]["tactical_chaos"].mean
+    before = ensemble.trust_matrix.cells["neural_siege"]["tactical_chaos"].mean
     chaos_only = ScenarioProfile({
         "tactical_chaos": 1.0,
         "endgame_structure": 0.0,
@@ -506,12 +604,17 @@ def _run_tests() -> bool:
         "open_file_pressure": 0.0,
         "pawn_storm_detected": 0.0,
     })
-    ensemble.update("Oracle", chaos_only, quality=1.0, autosave=False)
-    after = ensemble.trust_matrix.cells["Oracle"]["tactical_chaos"].mean
-    untouched = ensemble.trust_matrix.cells["Oracle"]["endgame_structure"].mean
+    ensemble.update("neural_siege", chaos_only, quality=1.0, score_cp=90, autosave=False)
+    after = ensemble.trust_matrix.cells["neural_siege"]["tactical_chaos"].mean
+    untouched = ensemble.trust_matrix.cells["neural_siege"]["endgame_structure"].mean
     t3 = after > before and abs(untouched - 0.5) < 1e-9
     ok &= t3
     print(f"  [{'PASS' if t3 else 'FAIL'}] Bayesian updates stay localized")
+
+    calibrated = ensemble.calibrators["neural_siege"].predict(90)
+    t4 = 0.0 <= calibrated <= 1.0
+    ok &= t4
+    print(f"  [{'PASS' if t4 else 'FAIL'}] Platt calibration stays bounded ({calibrated:.3f})")
 
     consensus_props = [
         EngineProposal("A", (52, 36, ""), 10, 0.51),
@@ -520,11 +623,20 @@ def _run_tests() -> bool:
         EngineProposal("D", (52, 36, ""), 40, 0.54),
         EngineProposal("E", (51, 35, ""), 80, 0.80),
     ]
-    consensus = Layer3Ensemble(engine_ids=["A", "B", "C", "D", "E"])
+    consensus = Layer3Ensemble(engine_ids=["A", "B", "C", "D", "E"], consensus_threshold=None)
     result2 = consensus.evaluate(state, consensus_props)
-    t4 = result2.short_circuit and result2.best_move == "e2e4"
-    ok &= t4
-    print(f"  [{'PASS' if t4 else 'FAIL'}] Consensus short-circuit fires")
+    t5 = result2.short_circuit and result2.best_move == "e2e4"
+    ok &= t5
+    print(f"  [{'PASS' if t5 else 'FAIL'}] Consensus short-circuit fires")
+
+    twenty_five = [
+        EngineProposal(f"engine_{i}", (52, 36, "") if i < 13 else (51, 35, ""), 20 + i, 0.55)
+        for i in range(25)
+    ]
+    ap = agreement_profile(twenty_five)
+    t6 = ap.majority == 1.0 and ap.majority_threshold == 13 and abs(ap.consensus_ratio - 13 / 25) < 1e-9
+    ok &= t6
+    print(f"  [{'PASS' if t6 else 'FAIL'}] Agreement thresholds scale to 25 nodes")
 
     print("=" * 62)
     print("All tests PASSED" if ok else "Some tests FAILED")

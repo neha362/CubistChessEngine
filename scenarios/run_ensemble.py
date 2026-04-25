@@ -2,15 +2,16 @@
 run_ensemble.py — the Cubist Chess Engine
 ==========================================
 
-This is the file that turns 5 engines + Layer 3 trust matrix into one
-chess engine. It is the missing wiring identified in the code review.
+This is the file that turns a 25-node Layer 1 proposal grid
+(5 search approaches x 5 eval approaches) plus Layer 3 trust into one
+chess engine.
 
 Pipeline (matches the architecture diagram):
 
   INPUT (board state, as FEN)
     │
     ▼
-  Each engine produces (move, score, confidence) via engine_wiring.py
+  Each search/eval pair produces (move, score, confidence)
     │
     ▼
   LAYER 1: detect_scenarios(state) → 6 scenario activations
@@ -48,6 +49,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 root = str(REPO_ROOT)
@@ -98,7 +100,7 @@ class CubistEngine:
     """
 
     def __init__(self, engines: list = None, persistence_path: str = TRUST_PATH,
-                 consensus_threshold: int = 4):
+                 consensus_threshold: Optional[int] = None):
         self.engine_names = engines or list(ENGINE_REGISTRY.keys())
         self.ensemble = Layer3Ensemble(
             engine_ids=self.engine_names,
@@ -128,8 +130,9 @@ class CubistEngine:
         """
         Update the trust matrix using per-move quality scores.
 
-        `scored_history` is a list of (engine_id, scenario_profile, quality)
-        triples — one per ply played. Produced by
+        `scored_history` is a list of
+        (engine_id, scenario_profile, quality, score_cp) tuples — one per
+        scored proposal. Produced by
         quality_scorer.score_game(history).
 
         For each ply, the engine's trust cells get a Bayesian update on the
@@ -142,8 +145,19 @@ class CubistEngine:
         Returns a per-engine summary {engine_id: average_quality}.
         """
         sums, counts = {}, {}
-        for engine_id, scenario_profile, quality in scored_history:
-            self.ensemble.update(engine_id, scenario_profile, quality, autosave=False)
+        for entry in scored_history:
+            if len(entry) == 4:
+                engine_id, scenario_profile, quality, score_cp = entry
+            else:
+                engine_id, scenario_profile, quality = entry
+                score_cp = None
+            self.ensemble.update(
+                engine_id,
+                scenario_profile,
+                quality,
+                score_cp=score_cp,
+                autosave=False,
+            )
             sums[engine_id] = sums.get(engine_id, 0.0) + quality
             counts[engine_id] = counts.get(engine_id, 0) + 1
 
@@ -157,14 +171,14 @@ class CubistEngine:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def print_proposals(proposals: list) -> None:
-    print("  Engine proposals:")
-    print("  ┌──────────────┬──────┬───────────┬────────────┬───────────┐")
-    print("  │ engine       │ move │ score_cp  │ confidence │ prior_wt  │")
-    print("  ├──────────────┼──────┼───────────┼────────────┼───────────┤")
+    print(f"  Layer 1 proposals ({len(proposals)} active nodes):")
+    print("  ┌───────────────────────────┬──────┬───────────┬────────────┬───────────┐")
+    print("  │ engine_pair               │ move │ score_cp  │ confidence │ prior_wt  │")
+    print("  ├───────────────────────────┼──────┼───────────┼────────────┼───────────┤")
     for p in proposals:
-        print(f"  │ {p.engine_id:<12} │ {p.uci:<4} │ {p.score_cp:>+9} │ "
+        print(f"  │ {p.engine_id:<25} │ {p.uci:<4} │ {p.score_cp:>+9} │ "
               f"{p.confidence:>10.3f} │ {p.prior_weight:>9.2f} │")
-    print("  └──────────────┴──────┴───────────┴────────────┴───────────┘")
+    print("  └───────────────────────────┴──────┴───────────┴────────────┴───────────┘")
 
 
 def print_explanation(result: Layer3Result) -> None:
@@ -184,20 +198,22 @@ def print_explanation(result: Layer3Result) -> None:
     ap = result.agreement_profile
     print()
     print(f"  Layer 2 — agreement: largest_group={ap.largest_group}  "
+          f"ratio={ap.consensus_ratio:.2f}  threshold={ap.majority_threshold}  "
           f"all_agree={int(ap.all_agree)}  majority={int(ap.majority)}  "
           f"split={int(ap.split)}")
 
     # Trust + final probabilities
     print()
     print("  Layer 3 — engine trust × softmax voting:")
-    print("    ┌──────────────┬─────────┬─────────────┐")
-    print("    │ engine       │  trust  │ vote_weight │")
-    print("    ├──────────────┼─────────┼─────────────┤")
+    print("    ┌───────────────────────────┬─────────┬────────────┬─────────────┐")
+    print("    │ engine_pair               │  trust  │ confidence │ vote_weight │")
+    print("    ├───────────────────────────┼─────────┼────────────┼─────────────┤")
     for engine_id in result.engine_trusts:
         t = result.engine_trusts[engine_id]
+        c = result.engine_confidences.get(engine_id, 0.0)
         p = result.engine_probs.get(engine_id, 0.0)
-        print(f"    │ {engine_id:<12} │ {t:>7.3f} │ {p:>11.3f} │")
-    print("    └──────────────┴─────────┴─────────────┘")
+        print(f"    │ {engine_id:<25} │ {t:>7.3f} │ {c:>10.3f} │ {p:>11.3f} │")
+    print("    └───────────────────────────┴─────────┴────────────┴─────────────┘")
 
     if result.short_circuit:
         print("  (Consensus short-circuit: ≥4 engines agreed, no softmax needed)")
@@ -412,4 +428,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

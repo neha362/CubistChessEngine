@@ -1,37 +1,60 @@
 """
-engine_wrappers.py - stable wrapper boundary for the ensemble
-=============================================================
+engine_wrappers.py - Layer 1 proposal generation for the ensemble
+=================================================================
 
-This module gives every engine the same public contract:
+This module normalizes a 5 x 5 grid of search/eval pairings into one public
+contract:
 
-    propose_<engine>(fen: str, **opts) -> EngineProposal | None
+    propose_<search>_<eval>(fen: str, **opts) -> EngineProposal | None
 
-All wrappers accept FEN at the boundary, convert that FEN into the engine's
-native board/state format internally, and return Layer 3's EngineProposal
-wire format.
+The five search approaches are:
+    classical, chaos, siege, mcts, neural
+
+The five eval approaches are:
+    classical, chaos, siege, neural, oracle
+
+That yields 25 Layer 1 proposal nodes. Some pairings are "pure" diagonal
+engines, some are cross-pairs, and some are bridge hybrids:
+
+  - MCTS + eval uses short eval-guided rollouts
+  - Neural search keeps its JS move selector, but its score/confidence is
+    measured through the chosen eval pair so Layer 3 still sees 25 distinct
+    nodes
+
+Wrappers are intentionally defensive: if a dependency is missing (for example
+python-chess, Node.js, or Anthropic credentials), the affected pair returns
+None and the rest of the ensemble continues.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-for sub in ("berserker1", "monte_carlo", "classical_minimax", "berserker_2", "scenarios"):
+for sub in ("adapter_code", "berserker1", "monte_carlo", "classical_minimax", "berserker_2", "scenarios"):
     path = str(REPO_ROOT / sub)
     if path not in sys.path:
         sys.path.insert(0, path)
 
-import chess  # noqa: E402
+try:
+    import chess  # type: ignore
+except Exception:  # pragma: no cover - depends on local environment
+    chess = None
 
-from layer3_ensemble import EngineProposal  # noqa: E402
-from movegen_agent import all_legal_moves, from_fen  # noqa: E402
+from layer3_ensemble import EngineProposal
+from movegen_agent import all_legal_moves, from_fen, make_move, sq_name
 
 
 FILES = "abcdefgh"
+SEARCH_APPROACHES = ("classical", "chaos", "siege", "mcts", "neural")
+EVAL_APPROACHES = ("classical", "chaos", "siege", "neural", "oracle")
+TREE_SEARCHABLE_EVALS = {"classical", "chaos", "siege"}
 
 
 def uci_to_tuple(uci: str) -> tuple[int, int, str]:
@@ -54,7 +77,7 @@ def tuple_to_uci(move: tuple[int, int, str]) -> str:
     return uci + (promotion or "")
 
 
-def chess_move_to_tuple(move: chess.Move) -> tuple[int, int, str]:
+def chess_move_to_tuple(move) -> tuple[int, int, str]:
     from_file = chess.square_file(move.from_square)
     from_rank = chess.square_rank(move.from_square)
     to_file = chess.square_file(move.to_square)
@@ -65,207 +88,353 @@ def chess_move_to_tuple(move: chess.Move) -> tuple[int, int, str]:
     return (from_sq, to_sq, promotion)
 
 
-def ab_confidence(score_cp: int) -> float:
-    return math.tanh(abs(score_cp) / 200.0)
+def _sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, x))))
 
 
-def mcts_confidence(win_rate: float) -> float:
-    return min(1.0, abs(win_rate - 0.5) * 2.0)
+def _score_prob(score_cp: float, scale: float = 400.0) -> float:
+    return _sigmoid(score_cp / scale)
 
 
-_classical_search = None
-_siege_search = None
+def score_confidence(score_cp: int, scale: float = 400.0) -> float:
+    return abs(2.0 * _score_prob(score_cp, scale=scale) - 1.0)
+
+
+def _state_to_fen(state) -> str:
+    rows = []
+    for r in range(8):
+        empty = 0
+        row_str = ""
+        for c in range(8):
+            piece = state.board[r * 8 + c]
+            if piece is None:
+                empty += 1
+            else:
+                if empty:
+                    row_str += str(empty)
+                    empty = 0
+                color, kind = piece[0], piece[1]
+                row_str += kind.upper() if color == "w" else kind.lower()
+        if empty:
+            row_str += str(empty)
+        rows.append(row_str)
+    pieces = "/".join(rows)
+
+    castling = ""
+    if state.castling.get("wK"):
+        castling += "K"
+    if state.castling.get("wQ"):
+        castling += "Q"
+    if state.castling.get("bK"):
+        castling += "k"
+    if state.castling.get("bQ"):
+        castling += "q"
+    castling = castling or "-"
+    ep = sq_name(state.ep_square) if state.ep_square is not None else "-"
+    return f"{pieces} {state.turn} {castling} {ep} {state.halfmove} {state.fullmove}"
+
+
 _proposal_cache: dict[tuple[str, tuple[str, ...]], list[EngineProposal]] = {}
 _cache_hits = 0
 _cache_misses = 0
+_classical_components = {}
+_siege_components = None
 
 
-def _get_classical():
-    global _classical_search
-    if _classical_search is None:
-        from chess_engine.move_gen import MoveGenAgent
-        from chess_engine.eval import EvalAgent
-        from chess_engine.search import SearchAgent
+def _fen_eval_classical(fen: str) -> float:
+    if chess is None:
+        raise RuntimeError("python-chess unavailable")
+    from chess_engine.eval import EvalAgent
 
-        evaluator = EvalAgent()
-        move_gen = MoveGenAgent()
-        _classical_search = (SearchAgent(eval_fn=evaluator.evaluate, move_gen=move_gen), evaluator)
-    return _classical_search
+    evaluator = EvalAgent()
+    return float(evaluator.evaluate(chess.Board(fen)))
 
 
-def _get_siege():
-    global _siege_search
-    if _siege_search is None:
-        import importlib.util
+def _fen_eval_chaos(fen: str) -> float:
+    import chaos_eval
 
-        siege_dir = REPO_ROOT / "berserker_2"
-
-        def _load(name: str):
-            spec = importlib.util.spec_from_file_location(f"siege_{name}", siege_dir / f"{name}.py")
-            module = importlib.util.module_from_spec(spec)
-            assert spec.loader is not None
-            spec.loader.exec_module(module)
-            return module
-
-        move_gen = _load("move_gen").MoveGen()
-        evaluator = _load("eval").Evaluator()
-        search = _load("search").Search(extend_checks_in_qsearch=True)
-        _siege_search = (move_gen, evaluator, search)
-    return _siege_search
+    return float(chaos_eval.evaluate(from_fen(fen)))
 
 
-def propose_classical(fen: str, max_depth: int = 3) -> Optional[EngineProposal]:
-    search, evaluator = _get_classical()
-    board = chess.Board(fen)
-    move = search.best_move(board, max_depth)
-    if move is None:
-        return None
-    score_cp = evaluator.evaluate(board)
-    if board.turn == chess.BLACK:
-        score_cp = -score_cp
-    return EngineProposal(
-        engine_id="classical",
-        move=chess_move_to_tuple(move),
-        score_cp=int(score_cp),
-        confidence=ab_confidence(score_cp),
-        prior_weight=1.0,
+def _fen_eval_siege(fen: str) -> float:
+    if chess is None:
+        raise RuntimeError("python-chess unavailable")
+    from eval import Evaluator as SiegeEvaluator
+
+    evaluator = SiegeEvaluator()
+    return float(evaluator.evaluate(chess.Board(fen)))
+
+
+def _fen_eval_neural(fen: str) -> float:
+    bridge = REPO_ROOT / "adapter_code" / "_bridge.js"
+    payload = json.dumps({"cmd": "eval", "fen": fen}) + "\n"
+    result = subprocess.run(
+        ["node", str(bridge)],
+        input=payload,
+        capture_output=True,
+        text=True,
+        cwd=str(bridge.parent),
+        timeout=8.0,
     )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError("neural eval bridge failed")
+    resp = json.loads(result.stdout.strip().splitlines()[-1])
+    return float(resp.get("score", 0.0))
 
 
-def propose_berserker(fen: str, max_depth: int = 3, movetime_ms: int = 800) -> Optional[EngineProposal]:
+def _fen_eval_oracle(fen: str, timeout: float = 12.0) -> float:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
+    try:
+        import httpx
+    except Exception as exc:
+        raise RuntimeError("httpx unavailable") from exc
+
+    payload = {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 200,
+        "system": (
+            "You are a chess evaluator. Return ONLY JSON: "
+            '{"score": <integer centipawns from white perspective>}.'
+        ),
+        "messages": [{"role": "user", "content": f"Evaluate this FEN: {fen}"}],
+    }
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        text = response.json()["content"][0]["text"]
+    last_brace = text.rfind("}")
+    first_brace = text.rfind("{", 0, last_brace + 1)
+    data = json.loads(text[first_brace:last_brace + 1])
+    return float(data.get("score", 0.0))
+
+
+EVAL_BACKENDS: dict[str, Callable[[str], float]] = {
+    "classical": _fen_eval_classical,
+    "chaos": _fen_eval_chaos,
+    "siege": _fen_eval_siege,
+    "neural": _fen_eval_neural,
+    "oracle": _fen_eval_oracle,
+}
+
+
+def _eval_from_fen(fen: str, eval_id: str) -> float:
+    return EVAL_BACKENDS[eval_id](fen)
+
+
+def _root_oriented_score(fen_before: str, move: tuple[int, int, str], eval_id: str) -> int:
+    state = from_fen(fen_before)
+    side = state.turn
+    child = make_move(state, move)
+    raw = _eval_from_fen(_state_to_fen(child), eval_id)
+    oriented = raw if side == "w" else -raw
+    return int(round(oriented))
+
+
+def _guidance_eval(search_id: str, eval_id: str) -> str:
+    if eval_id in TREE_SEARCHABLE_EVALS:
+        return eval_id
+    return {
+        "classical": "classical",
+        "chaos": "chaos",
+        "siege": "siege",
+        "mcts": eval_id,
+        "neural": eval_id,
+    }[search_id]
+
+
+def _get_classical_search(eval_id: str):
+    if eval_id in _classical_components:
+        return _classical_components[eval_id]
+    if chess is None:
+        raise RuntimeError("python-chess unavailable")
+    from chess_engine.move_gen import MoveGenAgent
+    from chess_engine.search import SearchAgent
+
+    def eval_fn(board) -> int:
+        return int(round(_eval_from_fen(board.fen(), eval_id)))
+
+    search = SearchAgent(eval_fn=eval_fn, move_gen=MoveGenAgent())
+    _classical_components[eval_id] = search
+    return search
+
+
+def _get_siege_components():
+    global _siege_components
+    if _siege_components is not None:
+        return _siege_components
+    if chess is None:
+        raise RuntimeError("python-chess unavailable")
+    from move_gen import MoveGen as SiegeMoveGen
+    from search import Search as SiegeSearch
+
+    _siege_components = (SiegeMoveGen(), SiegeSearch(extend_checks_in_qsearch=True))
+    return _siege_components
+
+
+def _search_classical(fen: str, eval_id: str, max_depth: int = 3):
+    if chess is None:
+        return None
+    board = chess.Board(fen)
+    if not list(board.legal_moves):
+        return None
+    search = _get_classical_search(_guidance_eval("classical", eval_id))
+    move = search.best_move(board, max_depth)
+    return None if move is None else chess_move_to_tuple(move)
+
+
+def _search_chaos(fen: str, eval_id: str, max_depth: int = 3, movetime_ms: int = 800):
     import berserker_search_agent as search_module
 
     state = from_fen(fen)
     if not all_legal_moves(state):
         return None
-    result = search_module.search(state, max_depth=max_depth, movetime_ms=movetime_ms, verbose=False)
-    if result.move is None:
+
+    original_eval = search_module._berserker_eval
+
+    guidance_eval = _guidance_eval("chaos", eval_id)
+
+    def bridged_eval(gs) -> float:
+        return _eval_from_fen(_state_to_fen(gs), guidance_eval)
+
+    search_module._berserker_eval = bridged_eval
+    try:
+        result = search_module.search(state, max_depth=max_depth, movetime_ms=movetime_ms, verbose=False)
+    finally:
+        search_module._berserker_eval = original_eval
+    return result.move
+
+
+def _search_siege(fen: str, eval_id: str, time_limit: float = 0.6, max_depth: int = 3):
+    if chess is None:
         return None
-    score_cp = result.score if state.turn == "w" else -result.score
-    return EngineProposal(
-        engine_id="berserker",
-        move=result.move,
-        score_cp=int(score_cp),
-        confidence=ab_confidence(score_cp),
-        prior_weight=1.0,
-    )
-
-
-def propose_mcts(fen: str, max_iter: int = 300, movetime_ms: int = 800) -> Optional[EngineProposal]:
-    import mcts_agent as search_module
-
-    state = from_fen(fen)
-    if not all_legal_moves(state):
-        return None
-    result = search_module.mcts_search(state, max_iter=max_iter, movetime_ms=movetime_ms, verbose=False)
-    if result.best_move is None:
-        return None
-    side_score_cp = int((result.win_rate - 0.5) * 800)
-    score_cp = side_score_cp if state.turn == "w" else -side_score_cp
-    return EngineProposal(
-        engine_id="mcts",
-        move=result.best_move,
-        score_cp=score_cp,
-        confidence=mcts_confidence(result.win_rate),
-        prior_weight=1.0,
-    )
-
-
-def propose_siege(fen: str, time_limit: float = 0.6, max_depth: int = 3) -> Optional[EngineProposal]:
-    move_gen, evaluator, search = _get_siege()
     board = chess.Board(fen)
     if not list(board.legal_moves):
         return None
-    move, score_cp = search.find_best_move(board, move_gen, evaluator, time_limit=time_limit, max_depth=max_depth)
+
+    move_gen, search = _get_siege_components()
+
+    guidance_eval = _guidance_eval("siege", eval_id)
+
+    class ProxyEval:
+        def evaluate(self, board_obj) -> int:
+            return int(round(_eval_from_fen(board_obj.fen(), guidance_eval)))
+
+    move, _score = search.find_best_move(board, move_gen, ProxyEval(), time_limit=time_limit, max_depth=max_depth)
+    return None if move is None else chess_move_to_tuple(move)
+
+
+def _search_mcts(
+    fen: str,
+    eval_id: str,
+    max_iter: int = 300,
+    movetime_ms: int = 800,
+    rollout_samples: int = 5,
+    rollout_plies: int = 8,
+):
+    import mcts_agent as search_module
+    import rollout_agent as rollout_module
+
+    state = search_module.from_fen(fen)
+    if not all_legal_moves(state):
+        return None
+
+    original_rollout = search_module.rollout
+
+    def eval_rollout(state_inner):
+        samples = []
+        for _ in range(max(1, rollout_samples)):
+            current = state_inner
+            for _ply in range(max(1, rollout_plies)):
+                if rollout_module.is_terminal(current):
+                    samples.append(rollout_module.game_result(current))
+                    break
+                move = rollout_module.ACTIVE_POLICY(current)
+                if move is None:
+                    samples.append(rollout_module.game_result(current))
+                    break
+                current = search_module.make_move(current, move)
+            else:
+                raw = _eval_from_fen(_state_to_fen(current), eval_id)
+                samples.append(_score_prob(raw, scale=400.0))
+        return sum(samples) / len(samples)
+
+    search_module.rollout = eval_rollout
+    try:
+        result = search_module.mcts_search(state, max_iter=max_iter, movetime_ms=movetime_ms, verbose=False)
+    finally:
+        search_module.rollout = original_rollout
+
+    return result.best_move
+
+
+def _search_neural(fen: str, _eval_id: str, depth: int = 3, time_ms: int = 3000):
+    bridge = REPO_ROOT / "adapter_code" / "_bridge.js"
+    payload = json.dumps({"cmd": "move", "fen": fen, "depth": depth, "timeLimitMs": time_ms}) + "\n"
+    result = subprocess.run(
+        ["node", str(bridge)],
+        input=payload,
+        capture_output=True,
+        text=True,
+        cwd=str(bridge.parent),
+        timeout=time_ms / 1000 + 5.0,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    resp = json.loads(result.stdout.strip().splitlines()[-1])
+    uci = resp.get("uci", "none")
+    return None if uci == "none" else uci_to_tuple(uci)
+
+
+SEARCH_BACKENDS: dict[str, Callable[..., Optional[tuple[int, int, str]]]] = {
+    "classical": _search_classical,
+    "chaos": _search_chaos,
+    "siege": _search_siege,
+    "mcts": _search_mcts,
+    "neural": _search_neural,
+}
+
+
+def _build_proposal(fen: str, search_id: str, eval_id: str, **opts) -> Optional[EngineProposal]:
+    move = SEARCH_BACKENDS[search_id](fen, eval_id, **opts)
     if move is None:
         return None
-    if board.turn == chess.BLACK:
-        score_cp = -score_cp
+    try:
+        score_cp = _root_oriented_score(fen, move, eval_id)
+    except Exception:
+        score_cp = 0
     return EngineProposal(
-        engine_id="siege",
-        move=chess_move_to_tuple(move),
+        engine_id=f"{search_id}_{eval_id}",
+        move=move,
         score_cp=int(score_cp),
-        confidence=ab_confidence(score_cp),
+        confidence=score_confidence(score_cp),
         prior_weight=1.0,
+        search_id=search_id,
+        eval_id=eval_id,
     )
 
 
-ORACLE_SYSTEM_PROMPT = """\
-You are a chess engine. Given a FEN and the list of legal moves in UCI form,
-return ONLY a JSON object on a single line: {"move":"<uci>","reason":"..."}.
-The move MUST be one of the legal moves verbatim. No markdown, no extra text."""
+def _make_wrapper(search_id: str, eval_id: str):
+    def wrapper(fen: str, **opts) -> Optional[EngineProposal]:
+        return _build_proposal(fen, search_id, eval_id, **opts)
 
-
-def propose_oracle(fen: str, timeout: float = 12.0) -> Optional[EngineProposal]:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return None
-
-    import json
-    import httpx
-
-    board = chess.Board(fen)
-    legal_moves = list(board.legal_moves)
-    if not legal_moves:
-        return None
-    legal_ucis = [move.uci() for move in legal_moves]
-
-    payload = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 200,
-        "system": ORACLE_SYSTEM_PROMPT,
-        "messages": [{
-            "role": "user",
-            "content": (
-                f"FEN: {fen}\n"
-                f"Legal moves: {', '.join(legal_ucis)}\n"
-                "Choose the best move."
-            ),
-        }],
-    }
-
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            response = client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            text = response.json()["content"][0]["text"]
-    except Exception:
-        return None
-
-    try:
-        last_brace = text.rfind("}")
-        first_brace = text.rfind("{", 0, last_brace + 1)
-        payload_obj = json.loads(text[first_brace:last_brace + 1])
-        uci = payload_obj.get("move", "").strip()
-    except Exception:
-        uci = ""
-
-    if uci not in legal_ucis:
-        return None
-
-    return EngineProposal(
-        engine_id="oracle",
-        move=uci_to_tuple(uci),
-        score_cp=0,
-        confidence=0.7,
-        prior_weight=1.2,
-    )
+    wrapper.__name__ = f"propose_{search_id}_{eval_id}"
+    return wrapper
 
 
 ENGINE_REGISTRY: dict[str, Callable[..., Optional[EngineProposal]]] = {
-    "classical": propose_classical,
-    "berserker": propose_berserker,
-    "mcts": propose_mcts,
-    "siege": propose_siege,
-    "oracle": propose_oracle,
+    f"{search_id}_{eval_id}": _make_wrapper(search_id, eval_id)
+    for search_id in SEARCH_APPROACHES
+    for eval_id in EVAL_APPROACHES
 }
 
 
@@ -301,16 +470,15 @@ def gather_proposals(
     if cache_key is not None:
         _cache_misses += 1
 
+    def run_one(name: str) -> Optional[EngineProposal]:
+        try:
+            return ENGINE_REGISTRY[name](fen)
+        except Exception as exc:
+            print(f"[{name}] skipped: {exc}")
+            return None
+
     if not parallel or len(selected) <= 1:
-        proposals = []
-        for name in selected:
-            try:
-                proposal = ENGINE_REGISTRY[name](fen)
-            except Exception as exc:
-                print(f"[{name}] crashed: {exc}")
-                proposal = None
-            if proposal is not None:
-                proposals.append(proposal)
+        proposals = [proposal for proposal in (run_one(name) for name in selected) if proposal is not None]
         if cache_key is not None:
             _proposal_cache[cache_key] = proposals
         return proposals
@@ -318,28 +486,12 @@ def gather_proposals(
     import concurrent.futures
 
     proposals: list[EngineProposal] = []
-
-    if "berserker" in selected:
-        try:
-            proposal = ENGINE_REGISTRY["berserker"](fen)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(selected), 8)) as executor:
+        future_map = {executor.submit(run_one, name): name for name in selected}
+        for future in concurrent.futures.as_completed(future_map):
+            proposal = future.result()
             if proposal is not None:
                 proposals.append(proposal)
-        except Exception as exc:
-            print(f"[berserker] crashed: {exc}")
-
-    parallel_names = [name for name in selected if name != "berserker"]
-    if parallel_names:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(parallel_names)) as executor:
-            future_map = {executor.submit(ENGINE_REGISTRY[name], fen): name for name in parallel_names}
-            for future in concurrent.futures.as_completed(future_map):
-                name = future_map[future]
-                try:
-                    proposal = future.result()
-                except Exception as exc:
-                    print(f"[{name}] crashed: {exc}")
-                    proposal = None
-                if proposal is not None:
-                    proposals.append(proposal)
 
     proposals.sort(key=lambda proposal: proposal.engine_id)
     if cache_key is not None:
